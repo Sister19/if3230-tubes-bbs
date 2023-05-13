@@ -263,6 +263,22 @@ class RaftNode:
 
     # Client RPCs
 
+    def client_handshake(self, _ : json) -> "json":
+        if self.type == RaftNode.NodeType.LEADER:
+            response = {
+                "status": "success",
+            }
+        else:
+            response = {
+                "status": "redirected",
+                "address": {
+                    "ip":   self.cluster_leader_addr.ip,
+                    "port": self.cluster_leader_addr.port,
+                },
+            }
+        
+        return json.dumps(response)
+
     def execute(self, json_request: str) -> "json":
         request = json.loads(json_request)
         # TODO : Implement execute
