@@ -22,7 +22,7 @@ class RaftNode:
         CANDIDATE = 2
         FOLLOWER = 3
 
-    def __init__(self, application: Any, addr: Address, contact_addr: Address = None):
+    def __init__(self, application: Any, addr: Address, contact_addr: Address = None, passive: bool = False):
         socket.setdefaulttimeout(RaftNode.RPC_TIMEOUT)
         self.address:             Address = addr
         self.type:                RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
@@ -36,6 +36,10 @@ class RaftNode:
         self.voted_for:           Address = None
         self.current_timeout:     int = 0
         self.commit_index:        int = 0
+        if passive:
+            self.type = RaftNode.NodeType.FOLLOWER
+            self.__print_log("Waiting for another node to contact...")
+            return
         if contact_addr is None:
             self.cluster_addr_list.append(self.address)
             self.__initialize_as_leader()
@@ -152,21 +156,15 @@ class RaftNode:
             },
         }
         accepted_addr_list = []
-        while True:
-            print(self.cluster_addr_list)
-            for addr in self.cluster_addr_list:
-                print(addr)
-                if addr != self.address and addr not in accepted_addr_list:
-                    print("aa")
-                    response = self.__send_request(request, "handle_vote_request", addr)
-                    if response["status"] == "success":
-                        print("aaa")
-                        accepted_addr_list.append(addr)
-                        self.vote_count += 1
-                        if self.vote_count > len(self.cluster_addr_list) / 2:
-                            self.__initialize_as_leader()
-                            return
-            time.sleep(RaftNode.RPC_TIMEOUT)
+        for addr in self.cluster_addr_list:
+            if addr != self.address and addr not in accepted_addr_list:
+                response = self.__send_request(request, "handle_vote_request", addr)
+                if response["status"] == "success":
+                    accepted_addr_list.append(addr)
+                    self.vote_count += 1
+                    if self.vote_count > len(self.cluster_addr_list) / 2:
+                        self.__initialize_as_leader()
+                        return
 
 
     # RPC methods
@@ -229,7 +227,6 @@ class RaftNode:
         return json.dumps(response)
     
     def handle_vote_request(self, json_request: str) -> "json":
-        print("!q")
         request = json.loads(json_request)
         candidate_addr = Address(request["candidate_addr"]["ip"], request["candidate_addr"]["port"])
         response = {
@@ -240,15 +237,10 @@ class RaftNode:
             },
             "message": "Already voted for another candidate"
         }
-        print("q")
         if self.election_term < request["election_term"]:
-            print("qq")
             self.election_term = request["election_term"]
-            print("qqq")
             self.voted_for = candidate_addr
-            print("qqqq")
             self.heartbeat_timer = 0
-            print("qqqqq")
             response = {
                 "status": "success",
                 "address": {
@@ -256,7 +248,6 @@ class RaftNode:
                     "port": candidate_addr.port,
                 }
             }
-            print("qqqqqq")
         return json.dumps(response)
     
     def change_leader(self, json_request: str) -> "json":
