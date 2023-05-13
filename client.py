@@ -11,8 +11,9 @@ class Client:
     RPC_TIMEOUT = 2
 
     def __init__(self, addr: Address, server_addr = Address):
-        self.addr = addr
-        self.server_addr = server_addr
+        self.addr: Address = addr
+        self.server_addr: Address = server_addr
+        self.cluster_addr_list: List[Address] = []
         self.__contact_leader()
 
     # Internal client methods
@@ -39,6 +40,7 @@ class Client:
             if response["status"] != "success":
                 print(f"[INFO] Leader not found, retrying..{tries}/10")
         
+        self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), response["cluster_addr_list"]))
         print("[INFO] Leader node found")
         self.server_addr = redirected_addr
 
@@ -81,19 +83,18 @@ if __name__ == "__main__":
     server_addr = Address(sys.argv[3], int(sys.argv[4]))
     client = Client(client_addr, server_addr)
     while True:
-        user_input = input()
+        user_input = input("> ")
         
-        if user_input == "exit":
-            print("goodbye")
-            break
-
-        if user_input[0] == ">":
-            message = user_input[2:]
-            print("queueing message:", message)
-            # send message
-            continue
-
-        if user_input[0] == "<":
-            print("receiving message")
-            # receive message
-            continue 
+        match user_input.split(" ")[0]:
+            case "exit": 
+                print("goodbye")
+                break
+            case "enqueue":
+                message = user_input.split(" ", 1)[1]
+                print("queueing message:", message)
+                # send message
+            case "dequeue":
+                print("receiving message")
+                # receive message
+            case _:
+                print("unknown command")

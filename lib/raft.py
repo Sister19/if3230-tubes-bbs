@@ -267,6 +267,7 @@ class RaftNode:
         if self.type == RaftNode.NodeType.LEADER:
             response = {
                 "status": "success",
+                "cluster_addr_list": self.cluster_addr_list,
             }
         else:
             response = {
