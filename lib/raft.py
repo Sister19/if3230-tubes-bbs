@@ -166,7 +166,6 @@ class RaftNode:
                         self.__initialize_as_leader()
                         return
 
-
     # RPC methods
     def __send_request(self, request: Any, rpc_name: str, addr: Address) -> "json":
         # Warning : This method is blocking
@@ -262,24 +261,6 @@ class RaftNode:
         return json.dumps(response)
 
     # Client RPCs
-
-    def client_handshake(self, _ : json) -> "json":
-        if self.type == RaftNode.NodeType.LEADER:
-            response = {
-                "status": "success",
-                "cluster_addr_list": self.cluster_addr_list,
-            }
-        else:
-            response = {
-                "status": "redirected",
-                "address": {
-                    "ip":   self.cluster_leader_addr.ip,
-                    "port": self.cluster_leader_addr.port,
-                },
-            }
-        
-        return json.dumps(response)
-
     def execute(self, json_request: str) -> "json":
         request = json.loads(json_request)
         # TODO : Implement execute

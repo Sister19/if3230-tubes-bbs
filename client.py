@@ -13,37 +13,6 @@ class Client:
     def __init__(self, addr: Address, server_addr = Address):
         self.addr: Address = addr
         self.server_addr: Address = server_addr
-        self.cluster_addr_list: List[Address] = []
-        self.__contact_leader()
-
-    # Internal client methods
-    def __contact_leader(self):
-        response = {
-            "status": "redirected",
-            "address": {
-                "ip":   self.server_addr.ip,
-                "port": self.server_addr.port,
-            }
-        }
-        request = {}
-
-        tries = 0
-        while response["status"] != "success":
-            if tries > 10:
-                print("[ERROR] Leader cannot found")
-                exit()
-            redirected_addr = Address(
-                response["address"]["ip"], response["address"]["port"])
-            response = self.__send_request(request, "client_handshake", redirected_addr)
-            time.sleep(self.RPC_TIMEOUT)
-            tries += 1
-            if response["status"] != "success":
-                print(f"[INFO] Leader not found, retrying..{tries}/10")
-        
-        self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), response["cluster_addr_list"]))
-        print("[INFO] Leader node found")
-        self.server_addr = redirected_addr
-
 
     # RPC Methods
     def __send_request(self, request: Any, rpc_name: str, addr: Address) -> "json":
