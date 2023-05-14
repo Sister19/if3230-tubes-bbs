@@ -14,6 +14,12 @@ class Client:
         self.addr: Address = addr
         self.server_addr: Address = server_addr
 
+    def change_server(self, addr: Address):
+        self.server_addr = addr
+
+    def __str__(self) -> str:
+        return f"{self.server_addr.ip}:{self.server_addr.port}"
+
     # RPC Methods
     def __send_request(self, request: Any, rpc_name: str, addr: Address) -> "json":
         # Warning : This method is blocking
@@ -22,8 +28,8 @@ class Client:
         rpc_function = getattr(node, rpc_name)
         try:
             response = json.loads(rpc_function(json_request))
-        except (ConnectionRefusedError, ConnectionResetError, ConnectionError, ConnectionAbortedError):
-            # self.__print_log(f"[{rpc_name}] Connection error")
+            print(response)
+        except:
             response = {
                 "status": "failure",
                 "address": {
@@ -31,16 +37,22 @@ class Client:
                     "port": addr.port,
                 }
             }
-        except socket.timeout:
-            # self.__print_log(f"[{rpc_name}] Timeout")
-            response = {
-                "status": "failure",
-                "address": {
-                    "ip":   addr.ip,
-                    "port": addr.port,
-                }
-            }
-        # self.__print_log(response)
+        return response
+    
+    #
+    #   Client - Server RPC
+    #
+    def enqueue(self, message: str) -> "json":
+        request = {
+            "method": "push",
+            "params": message
+        }
+        response = self.__send_request(request, "execute", self.server_addr)
+        return response
+
+    def dequeue(self) -> "json":
+        request = {}
+        response = self.__send_request(request, "dequeue", self.server_addr)
         return response
 
 if __name__ == "__main__":
@@ -62,8 +74,25 @@ if __name__ == "__main__":
                 message = user_input.split(" ", 1)[1]
                 print("queueing message:", message)
                 # send message
+                client.enqueue(message)
+
             case "dequeue":
                 print("receiving message")
                 # receive message
+            case "node":
+                if user_input.split(" ")[1] == "status":
+                    print("Server node at", str(client))
+                elif user_input.split(" ")[1] == "change":
+                    temp_addr = Address(user_input.split(" ")[2], int(user_input.split(" ")[3]))
+                    client.change_server(temp_addr)
+                    print("Server node changed to", str(client))
+                else:
+                    print("unknown command")
+            case "help":
+                print('enqueue <message>        :           enqueue a message')
+                print('dequeue                  :           dequeue a message')
+                print('node status              :           show current server node')
+                print('node change <ip> <port>  :           change server node')
+                print('exit                     :           exit the program')
             case _:
                 print("unknown command")
