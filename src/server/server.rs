@@ -1,7 +1,11 @@
+mod raft;
+
 use std::net::SocketAddr;
 use std::env;
 use axum::{routing::post, Router};
 use lib::{HelloRequest, HelloResponse};
+
+
 
 async fn handle_request(request: axum::extract::Json<HelloRequest>) -> axum::response::Json<HelloResponse> {
     println!("{}", request.message);

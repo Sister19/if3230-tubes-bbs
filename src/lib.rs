@@ -9,3 +9,14 @@ pub struct HelloRequest {
 pub struct HelloResponse {
     pub message: String,
 }
+
+pub enum Response {
+    FAILURE,
+    SUCCESS,
+}
+
+pub enum NodeType {
+    LEADER,
+    FOLLOWER,
+    CANDIDATE,
+}
