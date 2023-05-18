@@ -5,12 +5,6 @@ use std::time::SystemTime;
 use axum::Json;
 use lib::NodeType;
 
-const HEARTBEAT_INTERVAL: u32 = 2;
-const ELECTION_TIMEOUT_MIN: u32 = 5;
-const ELECTION_TIMEOUT_MAX: u32 = 8;
-const RPC_TIMEOUT: u32 = 2;
-const FOLLOWER_TIMEOUT: u32 = 10;
-
 struct RaftNode {
     address: SocketAddr,
     node_type: NodeType,
@@ -26,6 +20,12 @@ struct RaftNode {
 }
 
 impl RaftNode {
+    const HEARTBEAT_INTERVAL: u32 = 2;
+    const ELECTION_TIMEOUT_MIN: u32 = 5;
+    const ELECTION_TIMEOUT_MAX: u32 = 8;
+    const RPC_TIMEOUT: u32 = 2;
+    const FOLLOWER_TIMEOUT: u32 = 10;
+    
     fn new(&mut self, addr: Option<SocketAddr>, contact_addr: Option<SocketAddr>, passive: bool) -> Self {
         let init_self = Self {
             address: addr.unwrap(),
