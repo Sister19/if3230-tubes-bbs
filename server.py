@@ -10,7 +10,7 @@ def start_serving(addr: Address, contact_node_addr: Address, passive: bool = Fal
     print(f"Starting Raft Server at {addr.ip}:{addr.port}")
     with SimpleXMLRPCServer((addr.ip, addr.port)) as server:
         server.register_introspection_functions()
-        server.register_instance(RaftNode(MessageQueue(), addr, contact_node_addr, passive))
+        server.register_instance(RaftNode(addr, contact_node_addr, passive))
         server.serve_forever()
 
 

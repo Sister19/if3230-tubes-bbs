@@ -45,14 +45,14 @@ class Client:
     def enqueue(self, message: str) -> "json":
         request = {
             "method": "push",
-            "params": message
+            "params": [message],
         }
         response = self.__send_request(request, "execute", self.server_addr)
         return response
 
     def dequeue(self) -> "json":
         request = {}
-        response = self.__send_request(request, "dequeue", self.server_addr)
+        response = self.__send_request(request, "execute", self.server_addr)
         return response
 
 if __name__ == "__main__":
@@ -70,13 +70,13 @@ if __name__ == "__main__":
             case "exit": 
                 print("goodbye")
                 break
-            case "enqueue":
+            case c if c in ["enqueue", "enq"]:
                 message = user_input.split(" ", 1)[1]
                 print("queueing message:", message)
                 # send message
                 client.enqueue(message)
 
-            case "dequeue":
+            case c if c in ["dequeue", "deq"]:
                 print("receiving message")
                 # receive message
             case "node":
