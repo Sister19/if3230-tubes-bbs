@@ -116,6 +116,7 @@ class RaftNode:
                 request, "apply_membership", redirected_addr)
             time.sleep(self.RPC_TIMEOUT)
         self.message_log = response["message_log"]
+        self.term_log = response["term_log"]
         self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), response["cluster_addr_list"]))
         self.cluster_leader_addr = redirected_addr
 
@@ -294,6 +295,7 @@ class RaftNode:
                 "status": "success",
                 "cluster_addr_list": self.cluster_addr_list,
                 "message_log": self.message_log,
+                "term_log": self.term_log,
             }
         else:
             response = {
