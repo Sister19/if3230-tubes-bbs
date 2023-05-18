@@ -27,6 +27,10 @@ class RaftNode:
     RPC_TIMEOUT = 5
     FOLLOWER_TIMEOUT = 15
 
+    class AppResponse(Enum):
+        SUCCESS = 1
+        FAILURE = 0
+
     class NodeType(Enum):
         LEADER = 1
         CANDIDATE = 2
@@ -56,8 +60,10 @@ class RaftNode:
         else:
             self.__try_to_apply_membership(contact_addr)
             self.__initialize_as_follower()
-
-    # Internal Raft Node methods
+    
+    #
+    #   Internal Raft Node methods
+    #
     def __get_random_timeout(self) -> int:
         return random.randint(RaftNode.ELECTION_TIMEOUT_MIN, RaftNode.ELECTION_TIMEOUT_MAX)
 
@@ -93,6 +99,7 @@ class RaftNode:
     async def __leader_heartbeat(self):
         while self.type == RaftNode.NodeType.LEADER:
             self.__print_log("[Leader] Sending heartbeat...")
+            self.__print_log(repr(self.app))
             for addr in self.cluster_addr_list:
                 if addr != self.address:
                     request = {
@@ -185,9 +192,19 @@ class RaftNode:
                     if self.vote_count > len(self.cluster_addr_list) / 2:
                         self.__initialize_as_leader()
                         return
+    
+    def __app_execute(self, json_request: json) -> "json":
+        request = json.loads(json_request)
+        app_function = getattr(self.app, request["method"])
+        try:
+            response = app_function(request["params"])
+            return response
+        except Exception as e:
+            return {"status": self.AppResponse.FAILURE.value}
 
-
-    # RPC methods
+    #
+    #   RPC methods
+    #
     def __send_request(self, request: Any, rpc_name: str, addr: Address) -> "json":
         # Warning : This method is blocking
         node = ServerProxy(f"http://{addr.ip}:{addr.port}")
@@ -294,9 +311,12 @@ class RaftNode:
         return json.dumps(response)
 
     # Client RPCs
-
     def execute(self, json_request: str) -> "json":
-        request = json.loads(json_request)
-        # TODO : Implement execute
-        return json.dumps(request)
-
+        response = {
+            "status": self.AppResponse.FAILURE.value,
+        }
+        if self.type == RaftNode.NodeType.LEADER:
+            response = self.__app_execute(json_request)
+        else:
+            response = self.__send_request(json.loads(json_request), "execute", self.cluster_leader_addr)
+        return json.dumps(response)
