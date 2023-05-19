@@ -32,6 +32,7 @@ class RaftNode:
         self.type:                RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
         self.message_log:         List[str] = []
         self.term_log:            List[int] = []    
+        self.commit_index_log:    List[int] = []
         self.committed_length:    int = 0
         self.election_term:       int = 0
         self.cluster_addr_list:   List[Address] = []
@@ -90,8 +91,21 @@ class RaftNode:
                 if addr != self.address:
                     request = {
                         "cluster_addr_list": self.cluster_addr_list,
+                        "method": "sync",
+                        "curr_term": self.election_term,
+                        "prefix_len": len(self.message_log) - len(self.commit_index_log) if len(self.message_log) > 0 else 0,
+                        "last_term": self.term_log[len(self.message_log) - 2] if len(self.message_log) > 1 else self.election_term,
+                        "messages": self.message_log[-(len(self.commit_index_log)):] if len(self.commit_index_log) > 0 else [],
+                        "last_message": self.message_log[len(self.message_log) - 1] if len(self.message_log) > 0 else "",
+                        "terms": [self.term_log[len(self.message_log) - 1]] if len(self.message_log) > 0 else [],
+                        "leader_commit": self.committed_length
                     }
-                    self.__send_request(request, "heartbeat", addr)
+                    follower_response = (self.__send_request(request, "heartbeat", addr))
+                    if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
+                        self.commit_index_log[-1] += 1
+            if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
+                self.committed_length += 1
+                self.commit_index_log = []
             await asyncio.sleep(RaftNode.HEARTBEAT_INTERVAL)
 
     def __try_to_apply_membership(self, contact_addr: Address):
@@ -187,8 +201,19 @@ class RaftNode:
         match request["method"]:
             case "push":
                 try:
-                    # IF NOT LEADER DOES THINGS DIFFERENTLY YAH
+                    self.__push(request["params"], [self.election_term], self.message_log.__len__())
+                    return {"ack": True}
+                except:
+                    return {"ack": False}
+            case "pop":
+                try:
+                    return json.dumps({"ack": True, "result": self.__pop()})
+                except:
+                    return {"ack": False}
+            case "sync":
+                try:
                     if self.type != self.NodeType.LEADER:
+                        print(request)
                         # Does some preliminary checks
                         if self.election_term < request["curr_term"]:
                             self.election_term = request["curr_term"]
@@ -196,17 +221,12 @@ class RaftNode:
                             self.type = self.NodeType.FOLLOWER
                         logOk: bool = (self.message_log.__len__() >= request["prefix_len"]) and (request["prefix_len"] == 0 or self.term_log[request["prefix_len"] - 1] == request["last_term"])
                         if self.election_term == request["curr_term"] and logOk:
-                            # If the log history is the same as previously, pass on
-                            # if not(request["params"]["messages"].__len__() == 0 and request["last_term"] == self.term_log[-1] and request["prefix_len"] == self.message_log.__len__()):
-                            #     return {"ack": False, "prefix_len_restart_at": request["prefix_len"] - 1}
                             self.__push(request["messages"], request["terms"], int(request["prefix_len"]))
-                            if request["leader_commit"] < self.committed_length:
-                                self.commited_length = request["leader_commit"]
+                            if request["leader_commit"] > self.committed_length:
+                                self.committed_length = request["leader_commit"]
                             return json.dumps({"ack": True})
                         return json.dumps({"ack": False})
-                    else:
-                        self.__push(request["params"], [self.election_term], self.message_log.__len__())
-                        return {"ack": True}
+                    return json.dumps({"ack": False, "err": "Not a follower"})
                 except:
                     return {"ack": False}
     #
@@ -216,6 +236,9 @@ class RaftNode:
         return self.message_log
     
     def __push(self, messages: List[str], terms: List[int], prefix_len: int):
+        if (len(messages) == 0):
+            return
+
         while prefix_len < self.message_log.__len__():
             self.term_log.pop(0)
             self.message_log.pop(0)
@@ -232,7 +255,8 @@ class RaftNode:
         repr_output = "Representation: \n"
         repr_output += "Term log    : " + str(self.term_log) + "\n"
         repr_output += "Message log : " + str(self.message_log) + "\n"
-        repr_output += "Curr term   : " + str(self.election_term)
+        repr_output += "Curr term   : " + str(self.election_term) + "\n"
+        repr_output += "Committed   : " + str(self.committed_length) + ""
         return repr_output 
 
     #
@@ -280,10 +304,12 @@ class RaftNode:
         request = json.loads(json_request)
         self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), request["cluster_addr_list"]))
         self.heartbeat_timer = 0
-        self.__print_log(self.__log_repr())
+        follower_resp = json.loads(self.app_execute(json_request))
         response = {
             "heartbeat_response": "ack",
         }
+        response.update(follower_resp)
+        self.__print_log(self.__log_repr())
         return json.dumps(response)
     
     def apply_membership(self, json_request: str) -> "json":
@@ -347,26 +373,29 @@ class RaftNode:
             "status": self.AppResponse.FAILURE.value,
         }
         if self.type == RaftNode.NodeType.LEADER:
-            acks: int = 0
             # If leader then add first to your own log
-            response = self.app_execute(json_request)
-            if response["ack"] == True:
-                acks += 1
-            # Then contact others to add them to their own
-            for addr in self.cluster_addr_list:
-                if addr != self.address:
-                    specific_request = {
-                        "method": "push",
-                        "curr_term": self.election_term,
-                        "prefix_len": len(self.message_log) - 1,
-                        "last_term": self.term_log[len(self.message_log) - 2],
-                        "messages": [self.message_log[len(self.message_log) - 1]],
-                        "terms": [self.term_log[len(self.message_log) - 1]],
-                        "leader_commit": self.committed_length
-                    } 
-                    response_follower = self.__send_request(specific_request, "app_execute", addr)
-                    if response_follower["ack"] == True:
-                        acks += 1
+            response = {
+                "ack": False
+            }
+            while response["ack"] == False:
+                response = self.app_execute(json_request)
+                time.sleep(0.05)
+            self.commit_index_log.append(1)
+            # # Then contact others to add them to their own
+            # for addr in self.cluster_addr_list:
+            #     if addr != self.address:
+            #         specific_request = {
+            #             "method": "push",
+            #             "curr_term": self.election_term,
+            #             "prefix_len": len(self.message_log) - 1,
+            #             "last_term": self.term_log[len(self.message_log) - 2],
+            #             "messages": [self.message_log[len(self.message_log) - 1]],
+            #             "terms": [self.term_log[len(self.message_log) - 1]],
+            #             "leader_commit": self.committed_length
+            #         } 
+            #         response_follower = self.__send_request(specific_request, "app_execute", addr)
+            #         if response_follower["ack"] == True:
+            #             acks += 1
         else:
             response = self.__send_request(json.loads(json_request), "execute", self.cluster_leader_addr)
         return json.dumps(response)
