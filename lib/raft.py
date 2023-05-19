@@ -1,7 +1,7 @@
 import asyncio
 from threading import Thread
 from xmlrpc.client import ServerProxy
-from typing import Any, List
+from typing import Any, List, Dict
 from enum import Enum
 from lib.struct.address import Address
 import json
@@ -38,20 +38,21 @@ class RaftNode:
 
     def __init__(self, addr: Address, contact_addr: Address = None, passive: bool = False):
         socket.setdefaulttimeout(RaftNode.RPC_TIMEOUT)
-        self.address:             Address = addr
-        self.type:                RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
-        self.message_log:         List[str] = []
-        self.term_log:            List[int] = []    
-        self.commit_index_log:    List[int] = []
-        self.committed_length:    int = 0
-        self.election_term:       int = 0
-        self.cluster_addr_list:   List[Address] = []
-        self.cluster_leader_addr: Address = None
-        self.heartbeat_timer:     int = 0
-        self.vote_count:          int = 0
-        self.voted_for:           Address = None
-        self.current_timeout:     int = 0
-        self.commit_index:        int = 0
+        self.address:                   Address = addr
+        self.type:                      RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
+        self.message_log:               List[str] = []
+        self.term_log:                  List[int] = []    
+        self.commit_index_log:          List[int] = []
+        self.committed_length:          int = 0
+        self.election_term:             int = 0
+        self.cluster_addr_list:         List[Address] = []
+        self.cluster_last_acked_msg:    Dict[Address, str] = {}
+        self.cluster_leader_addr:       Address = None
+        self.heartbeat_timer:           int = 0
+        self.vote_count:                int = 0
+        self.voted_for:                 Address = None
+        self.current_timeout:           int = 0
+        self.commit_index:              int = 0
         if passive:
             self.type = RaftNode.NodeType.FOLLOWER
             self.__print_log("Waiting for another node to contact...")
@@ -121,8 +122,21 @@ class RaftNode:
                         "election_term": self.election_term,
                     }
                     follower_response = (self.__send_request(request, "heartbeat", addr))
+                    if follower_response["ack"] == False and follower_response["status"] != "failure":
+                        # Does error correcting
+
+                        # When follower is zeroed (ex: cold restart)
+                        if follower_response["message_len"] == 0 and len(self.message_log) != 0:
+                            request["prefix_len"] = 0
+                            request["messages"] = self.message_log
+                            request["terms"] = self.term_log
+                            follower_response = (self.__send_request(request, "heartbeat", addr))
+
+                        # TODO: When follower is behind
                     if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
                         self.commit_index_log[-1] += 1
+
+                        pass
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
                 self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
@@ -151,6 +165,8 @@ class RaftNode:
             time.sleep(self.RPC_TIMEOUT)
         self.message_log = response["message_log"]
         self.term_log = response["term_log"]
+        self.committed_length = response["leader_commit"]
+        self.election_term = response["election_term"]
         self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), response["cluster_addr_list"]))
         self.cluster_leader_addr = redirected_addr
 
@@ -245,7 +261,13 @@ class RaftNode:
                             if request["leader_commit"] > self.committed_length:
                                 self.committed_length = request["leader_commit"]
                             return json.dumps({"ack": True})
-                        return json.dumps({"ack": False})
+                        return json.dumps({
+                            "ack": False, 
+                            "message_len": len(self.message_log), 
+                            "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
+                            "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
+                             })
+                            
                     return json.dumps({"ack": False, "err": "Not a follower"})
                 except:
                     return {"ack": False}
@@ -333,7 +355,7 @@ class RaftNode:
             self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), request["cluster_addr_list"]))
             self.heartbeat_timer = 0
             follower_resp = json.loads(self.app_execute(json_request))
-            if (request["election_term"] > self.election_term):
+            if (request["election_term"] > self.election_term) or self.cluster_leader_addr is None:
                 self.election_term = request["election_term"]
                 self.voted_for = None
                 self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
@@ -360,6 +382,8 @@ class RaftNode:
                 "cluster_addr_list": self.cluster_addr_list,
                 "message_log": self.message_log,
                 "term_log": self.term_log,
+                "election_term": self.election_term,
+                "leader_commit": self.committed_length,
             }
         else:
             response = {

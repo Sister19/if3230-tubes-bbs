@@ -10,7 +10,7 @@ import time
 class Client:
     RPC_TIMEOUT = 2
 
-    def __init__(self, addr: Address, server_addr = Address):
+    def __init__(self, addr: Address, server_addr: Address):
         self.addr: Address = addr
         self.server_addr: Address = server_addr
 
