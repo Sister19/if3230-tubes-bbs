@@ -42,17 +42,26 @@ class Client:
     #
     #   Client - Server RPC
     #
-    def enqueue(self, message: str) -> "json":
-        request = {
-            "method": "push",
-            "params": [message],
-        }
-        response = self.__send_request(request, "execute", self.server_addr)
-        return response
+    # def enqueue(self, message: str) -> "json":
+    #     request = {
+    #         "method": "push",
+    #         "params": [message],
+    #     }
+    #     response = self.__send_request(request, "execute", self.server_addr)
+    #     return response
 
-    def dequeue(self) -> "json":
+    # def dequeue(self) -> "json":
+    #     request = {
+    #         "method": "pop",
+    #     }
+    #     response = self.__send_request(request, "execute", self.server_addr)
+    #     return response
+
+    def execute(self, method: str, message=None) -> "json":
+        params = [message] if message is not None else []
         request = {
-            "method": "pop",
+            "method": method,
+            "params": params,
         }
         response = self.__send_request(request, "execute", self.server_addr)
         return response
@@ -76,11 +85,11 @@ if __name__ == "__main__":
                 message = user_input.split(" ", 1)[1]
                 print("queueing message:", message)
                 # send message
-                client.enqueue(message)
+                client.execute("push", message)
 
             case c if c in ["dequeue", "deq"]:
                 # receive message
-                print("receiving message", client.dequeue())
+                print("receiving message", client.execute("pop"))
             case "node":
                 if user_input.split(" ")[1] == "status":
                     print("Server node at", str(client))
