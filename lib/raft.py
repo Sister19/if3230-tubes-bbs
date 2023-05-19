@@ -94,17 +94,17 @@ class RaftNode:
                         "method": "sync",
                         "curr_term": self.election_term,
                         "prefix_len": len(self.message_log) - len(self.commit_index_log) if len(self.message_log) > 0 else 0,
-                        "last_term": self.term_log[len(self.message_log) - 2] if len(self.message_log) > 1 else self.election_term,
+                        "last_term": self.term_log[len(self.message_log) - len(self.commit_index_log) - 1] if len(self.message_log) > 0 else self.election_term,
                         "messages": self.message_log[-(len(self.commit_index_log)):] if len(self.commit_index_log) > 0 else [],
-                        "last_message": self.message_log[len(self.message_log) - 1] if len(self.message_log) > 0 else "",
-                        "terms": [self.term_log[len(self.message_log) - 1]] if len(self.message_log) > 0 else [],
+                        "last_message": self.message_log[len(self.message_log) - len(self.commit_index_log) - 1] if len(self.message_log) > 0 else "",
+                        "terms": self.term_log[-len(self.commit_index_log):] if len(self.message_log) > 0 else [],
                         "leader_commit": self.committed_length
                     }
                     follower_response = (self.__send_request(request, "heartbeat", addr))
                     if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
                         self.commit_index_log[-1] += 1
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
-                self.committed_length += 1
+                self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
             await asyncio.sleep(RaftNode.HEARTBEAT_INTERVAL)
 
