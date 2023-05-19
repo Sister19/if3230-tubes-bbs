@@ -13,10 +13,10 @@ class MessageQueue:
         return {"status": self.Response.SUCCESS.value}
 
     def pop(self) -> str:
-        return {"status": self.Response.SUCCESS.value, "result": self.queue.pop(0)}
+        return str({"status": self.Response.SUCCESS.value, "result": self.queue.pop(0)})
 
-    def is_empty(self) -> bool:
-        return {"status": self.Response.SUCCESS.value, "result": len(self.queue) == 0}
+    def is_empty(self) -> str:
+        return str({"status": self.Response.SUCCESS.value, "result": len(self.queue) == 0})
 
     def __str__(self) -> str:
         return str(self.queue)

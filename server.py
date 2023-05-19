@@ -6,7 +6,7 @@ import sys
 import socket
 
 
-def start_serving(addr: Address, contact_node_addr: Address, passive: bool = False):
+def start_serving(addr: Address, contact_node_addr: Address | None = None, passive: bool = False):
     print(f"Starting Raft Server at {addr.ip}:{addr.port}")
     with SimpleXMLRPCServer((addr.ip, addr.port)) as server:
         server.register_introspection_functions()
@@ -28,4 +28,4 @@ if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[3] == "-p":
         start_serving(server_addr, contact_addr, True)
     else:
-        start_serving(server_addr, contact_addr)
+        start_serving(server_addr)

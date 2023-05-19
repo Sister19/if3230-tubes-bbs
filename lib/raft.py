@@ -36,7 +36,7 @@ class RaftNode:
         CANDIDATE = 2
         FOLLOWER = 3
 
-    def __init__(self, addr: Address, contact_addr: Address = None, passive: bool = False):
+    def __init__(self, addr: Address, contact_addr: Address | None, passive: bool = False):
         socket.setdefaulttimeout(RaftNode.RPC_TIMEOUT)
         self.address:             Address = addr
         self.type:                RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
@@ -46,10 +46,10 @@ class RaftNode:
         self.committed_length:    int = 0
         self.election_term:       int = 0
         self.cluster_addr_list:   List[Address] = []
-        self.cluster_leader_addr: Address = None
+        self.cluster_leader_addr: Address | None = None
         self.heartbeat_timer:     int = 0
         self.vote_count:          int = 0
-        self.voted_for:           Address = None
+        self.voted_for:           Address | None = None
         self.current_timeout:     int = 0
         self.commit_index:        int = 0
         if passive:
@@ -120,7 +120,7 @@ class RaftNode:
                         },
                         "election_term": self.election_term,
                     }
-                    follower_response = (self.__send_request(request, "heartbeat", addr))
+                    follower_response = json.loads(self.__send_request(request, "heartbeat", addr))
                     if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
                         self.commit_index_log[-1] += 1
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
@@ -130,8 +130,9 @@ class RaftNode:
 
     def __try_to_apply_membership(self, contact_addr: Address):
         redirected_addr = contact_addr
+        status = "redirected"
         response = {
-            "status": "redirected",
+            "status": status,
             "address": {
                 "ip":   contact_addr.ip,
                 "port": contact_addr.port,
@@ -143,11 +144,11 @@ class RaftNode:
                 "port": self.address.port,
             },
         }
-        while response["status"] != "success":
+        while status != "success":
             redirected_addr = Address(
                 response["address"]["ip"], response["address"]["port"])
-            response = self.__send_request(
-                request, "apply_membership", redirected_addr)
+            response = json.loads(self.__send_request(
+                request, "apply_membership", redirected_addr))
             time.sleep(self.RPC_TIMEOUT)
         self.message_log = response["message_log"]
         self.term_log = response["term_log"]
@@ -203,7 +204,7 @@ class RaftNode:
         accepted_addr_list = []
         for addr in self.cluster_addr_list:
             if addr != self.address and addr not in accepted_addr_list:
-                response = self.__send_request(request, "handle_vote_request", addr)
+                response = json.loads(self.__send_request(request, "handle_vote_request", addr))
                 if response["status"] == "success":
                     accepted_addr_list.append(addr)
                     self.vote_count += 1
@@ -215,22 +216,22 @@ class RaftNode:
     # External Log methods
     #
 
-    def app_execute(self, json_request: json) -> "json":
+    def app_execute(self, json_request: str) -> str:
         # print("Type??", type(json_request), "at", str(self.address))
         request = json.loads(json_request)
         match request["method"]:
             case "push":
                 try:
                     self.__push(request["params"], [self.election_term], self.message_log.__len__())
-                    return {"ack": True}
+                    return json.dumps({"ack": True})
                 except:
-                    return {"ack": False}
+                    return json.dumps({"ack": False})
             case "pop":
                 try:
                     response = {"ack": True, "result": self.__pop()}
-                    return response
+                    return json.dumps(response)
                 except:
-                    return {"ack": False}
+                    return json.dumps({"ack": False})
             case "sync":
                 try:
                     if self.type != self.NodeType.LEADER:
@@ -248,7 +249,9 @@ class RaftNode:
                         return json.dumps({"ack": False})
                     return json.dumps({"ack": False, "err": "Not a follower"})
                 except:
-                    return {"ack": False}
+                    return json.dumps({"ack": False})
+            case _ :
+                return json.dumps({"ack": False, "err": "Invalid method"})
     #
     #   Internal Log Methods
     #
@@ -284,7 +287,7 @@ class RaftNode:
     #
     #   RPC methods
     #
-    def __send_request(self, request: Any, rpc_name: str, addr: Address) -> "json":
+    def __send_request(self, request: Any, rpc_name: str, addr: Address) -> str:
         # Warning : This method is blocking
         node = ServerProxy(f"http://{addr.ip}:{addr.port}")
         json_request = json.dumps(request)
@@ -310,7 +313,7 @@ class RaftNode:
                 }
             }
         except Exception as e:
-            self.__print_log(f"[{rpc_name}] Unknown error : {e}", "at", str(addr))
+            self.__print_log(f"[{rpc_name}] Unknown error : {e} \nat {str(addr)}")
             response = {
                 "status": "failure",
                 "address": {
@@ -318,11 +321,11 @@ class RaftNode:
                     "port": addr.port,
                 }
             } 
-        self.__print_log(response)
-        return response
+        self.__print_log(json.dumps(response))
+        return json.dumps(response)
 
     # Inter-node RPCs
-    def heartbeat(self, json_request: str) -> "json":
+    def heartbeat(self, json_request: str) -> str:
         if (self.type == RaftNode.NodeType.FOLLOWER):
             request = json.loads(json_request)
             self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), request["cluster_addr_list"]))
@@ -343,7 +346,7 @@ class RaftNode:
         self.__print_log(self.__log_repr())
         return json.dumps(response)
     
-    def apply_membership(self, json_request: str) -> "json":
+    def apply_membership(self, json_request: str) -> str:
         request = json.loads(json_request)
         if (self.type == RaftNode.NodeType.LEADER):
             new_addr = Address(request["address"]["ip"], request["address"]["port"])
@@ -360,13 +363,13 @@ class RaftNode:
             response = {
                 "status": "redirected",
                 "address": {
-                    "ip":   self.cluster_leader_addr.ip,
-                    "port": self.cluster_leader_addr.port,
+                    "ip":   self.cluster_leader_addr.ip if self.cluster_leader_addr else self.address.ip,
+                    "port": self.cluster_leader_addr.port if self.cluster_leader_addr else self.address.port,
                 }
             }
         return json.dumps(response)
     
-    def handle_vote_request(self, json_request: str) -> "json":
+    def handle_vote_request(self, json_request: str) -> str:
         request = json.loads(json_request)
         candidate_addr = Address(request["candidate_addr"]["ip"], request["candidate_addr"]["port"])
         response = {
@@ -391,7 +394,7 @@ class RaftNode:
             }
         return json.dumps(response)
     
-    def change_leader(self, json_request: str) -> "json":
+    def change_leader(self, json_request: str) -> str:
         request = json.loads(json_request)
         self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
         self.election_term = request["election_term"]
@@ -402,21 +405,20 @@ class RaftNode:
         return json.dumps(response)
 
     # Client RPCs
-    def execute(self, json_request: str) -> "json":
-        response = {
+    def execute(self, json_request: str) -> str:
+        response = json.dumps({
             "status": self.AppResponse.FAILURE.value,
-        }
+        })
         request = json.loads(json_request)
         if self.type == RaftNode.NodeType.LEADER:
             # If leader then add first to your own log
-            response = {
-                "ack": False
-            }
-            while response["ack"] == False:
+            ack = False
+            while ack == False:
                 response = self.app_execute(json_request)
+                ack = json.loads(response)["ack"]
                 time.sleep(0.05)
             if request["method"] == "push":
                 self.commit_index_log.append(1)
-        else:
+        elif self.cluster_leader_addr is not None:
             response = self.__send_request(json.loads(json_request), "execute", self.cluster_leader_addr)
-        return json.dumps(response)
+        return response

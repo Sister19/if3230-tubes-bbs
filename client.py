@@ -10,7 +10,7 @@ import time
 class Client:
     RPC_TIMEOUT = 2
 
-    def __init__(self, addr: Address, server_addr = Address):
+    def __init__(self, addr: Address, server_addr: Address):
         self.addr: Address = addr
         self.server_addr: Address = server_addr
 
@@ -21,7 +21,7 @@ class Client:
         return f"{self.server_addr.ip}:{self.server_addr.port}"
 
     # RPC Methods
-    def __send_request(self, request: Any, rpc_name: str, addr: Address) -> "json":
+    def __send_request(self, request: Any, rpc_name: str, addr: Address) -> str:
         # Warning : This method is blocking
         node = ServerProxy(f"http://{addr.ip}:{addr.port}")
         json_request = json.dumps(request)
@@ -37,7 +37,7 @@ class Client:
                     "port": addr.port,
                 }
             }
-        return response
+        return json.dumps(response)
     
     #
     #   Client - Server RPC
@@ -57,7 +57,7 @@ class Client:
     #     response = self.__send_request(request, "execute", self.server_addr)
     #     return response
 
-    def execute(self, method: str, message=None) -> "json":
+    def execute(self, method: str, message=None) -> str:
         params = [message] if message is not None else []
         request = {
             "method": method,
@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
             case c if c in ["dequeue", "deq"]:
                 # receive message
-                print("receiving message", client.execute("pop"))
+                print("receiving message: ", client.execute("pop"))
             case "node":
                 if user_input.split(" ")[1] == "status":
                     print("Server node at", str(client))
