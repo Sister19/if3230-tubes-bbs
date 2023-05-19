@@ -51,7 +51,9 @@ class Client:
         return response
 
     def dequeue(self) -> "json":
-        request = {}
+        request = {
+            "method": "pop",
+        }
         response = self.__send_request(request, "execute", self.server_addr)
         return response
 
@@ -77,8 +79,8 @@ if __name__ == "__main__":
                 client.enqueue(message)
 
             case c if c in ["dequeue", "deq"]:
-                print("receiving message")
                 # receive message
+                print("receiving message", client.dequeue())
             case "node":
                 if user_input.split(" ")[1] == "status":
                     print("Server node at", str(client))
