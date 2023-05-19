@@ -112,7 +112,7 @@ class RaftNode:
                         "last_term": self.term_log[len(self.message_log) - len(self.commit_index_log) - 1] if len(self.message_log) > 0 else self.election_term,
                         "messages": self.message_log[-(len(self.commit_index_log)):] if len(self.commit_index_log) > 0 else [],
                         "last_message": self.message_log[len(self.message_log) - len(self.commit_index_log) - 1] if len(self.message_log) > 0 else "",
-                        "terms": self.term_log[-len(self.commit_index_log):] if len(self.message_log) > 0 else [],
+                        "terms": self.term_log[-len(self.commit_index_log):] if len(self.commit_index_log ) > 0 else [],
                         "leader_commit": self.committed_length,
                         "cluster_leader_addr": {
                             "ip":   self.address.ip,
@@ -278,7 +278,10 @@ class RaftNode:
         repr_output += "Term log    : " + str(self.term_log) + "\n"
         repr_output += "Message log : " + str(self.message_log) + "\n"
         repr_output += "Curr term   : " + str(self.election_term) + "\n"
-        repr_output += "Committed   : " + str(self.committed_length) + ""
+        repr_output += "Committed   : " + str(self.committed_length) + "\n"
+        # repr_output += "Type        : " + str(self.type) + "\n"
+        # repr_output += "Addr        : " + str(self.address) + "\n"
+        # repr_output += "Leader Addr : " + str(self.cluster_leader_addr) + ""
         return repr_output 
 
     #
@@ -295,6 +298,7 @@ class RaftNode:
             self.__print_log(f"[{rpc_name}] Connection error")
             response = {
                 "status": "failure",
+                "ack": False,
                 "address": {
                     "ip":   addr.ip,
                     "port": addr.port,
@@ -304,6 +308,7 @@ class RaftNode:
             self.__print_log(f"[{rpc_name}] Timeout")
             response = {
                 "status": "failure",
+                "ack": False,
                 "address": {
                     "ip":   addr.ip,
                     "port": addr.port,
