@@ -158,7 +158,8 @@ class RaftNode:
 
             responses = await asyncio.gather(*tasks)
 
-            for response in responses:
+            for response_str in responses:
+                response = json.loads(response_str)
                 # Troubled cluster, no more
                 if response["ack"] == True and ("addr" in response.keys() and response["addr"] in self.troubled_clusters.keys()):
                     self.troubled_clusters.pop(response["addr"])
@@ -195,10 +196,12 @@ class RaftNode:
             },
         }
         while status != "success":
+            print("status:", status)
             redirected_addr = Address(
                 response["address"]["ip"], response["address"]["port"])
             response = json.loads(self.__send_request(
                 request, "apply_membership", redirected_addr))
+            status = response["status"]
             time.sleep(self.RPC_TIMEOUT)
         self.message_log = response["message_log"]
         self.term_log = response["term_log"]
