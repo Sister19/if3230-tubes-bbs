@@ -45,7 +45,7 @@ class RaftNode:
         self.committed_length:          int = 0
         self.election_term:             int = 0
         self.cluster_addr_list:         List[Address] = []
-        self.cluster_last_acked_msg:    Dict[Address, str] = {}
+        self.troubled_clusters:         Dict[str, Dict[str, Any]] = {}
         self.cluster_leader_addr:       Address = None
         self.heartbeat_timer:           int = 0
         self.vote_count:                int = 0
@@ -100,10 +100,15 @@ class RaftNode:
                                        self.__leader_heartbeat()])
         self.heartbeat_thread.start()
 
+    # async def __hearbeat_to_follower(self, follower_addr: Address, request: Dict[str, Any]):
+    #     self.__print_log(f"[Leader] Sending heartbeat to {follower_addr}")
+    #     self.__send_request(request, "heartbeat", follower_addr)
+
     async def __leader_heartbeat(self):
         while self.type == RaftNode.NodeType.LEADER:
             self.__print_log("[Leader] Sending heartbeat...")
             self.__print_log(self.__log_repr())
+            tasks = []
             for addr in self.cluster_addr_list:
                 if addr != self.address:
                     request = {
@@ -122,27 +127,55 @@ class RaftNode:
                         },
                         "election_term": self.election_term,
                     }
-                    follower_response = self.__send_request(request, "heartbeat", addr)
-                    if follower_response["status"] == "failure":
-                        continue
-                    if follower_response["ack"] == False and follower_response["status"] != "failure":
-                        # Does error correcting
 
+                    # TODO: Handle custom request here
+                    if str(addr) in self.troubled_clusters.keys():
+                        response = self.troubled_clusters[str(addr)]
                         # When follower is zeroed (ex: cold restart)
-                        if follower_response["message_len"] == 0 and len(self.message_log) != 0:
+                        if response["message_len"] == 0 and len(self.message_log) != 0:
                             request["prefix_len"] = 0
                             request["messages"] = self.message_log
                             request["terms"] = self.term_log
-                            follower_response = self.__send_request(request, "heartbeat", addr)
+                        
+                        # When follower is delayed (ex: network delay)
+                        else:
+                            for idx in range(len(self.message_log) - 1, -1, -1):
+                                if self.message_log[idx] == response["last_message"] and self.term_log[idx] == response["last_term"]:
+                                    # set the prefix_len, last_term, messages, last_message, terms
+                                    request["prefix_len"] = len(self.message_log) - idx
+                                    request["last_term"] = self.term_log[idx]
+                                    request["last_message"] = self.message_log[idx]
+                                    request["messages"] = self.message_log[idx:]
+                                    request["terms"] = self.term_log[idx:]
+                                    break
+                            # Last message not found, send all messages
+                            request["prefix_len"] = 0
+                            request["messages"] = self.message_log
+                            request["terms"] = self.term_log
 
-                        # TODO: When follower is behind
-                    if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
-                        self.commit_index_log[-1] += 1
+                    # Add to tasks list
+                    tasks.append(asyncio.create_task(self.__send_heartbeat(request, "heartbeat", addr)))
 
-                        pass
+            responses = await asyncio.gather(*tasks)
+
+            for response in responses:
+                # Troubled cluster, no more
+                if response["ack"] == True and ("addr" in response.keys() and response["addr"] in self.troubled_clusters.keys()):
+                    self.troubled_clusters.pop(response["addr"])
+
+                # Follower acked the message, increment commit index
+                if self.commit_index_log.__len__() > 0 and response["ack"] == True:
+                    self.commit_index_log[-1] += 1
+
+                # Troubled cluster, offer help (call 911)
+                if response["ack"] == False and response["status"] != "failure":
+                    self.troubled_clusters[str(response["addr"])] = response
+
+
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
                 self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
+                
             await asyncio.sleep(RaftNode.HEARTBEAT_INTERVAL)
 
     def __try_to_apply_membership(self, contact_addr: Address):
@@ -273,6 +306,7 @@ class RaftNode:
                         return json.dumps({"ack": True})
                     return json.dumps({
                         "ack": False, 
+                        "addr": str(self.address),
                         "message_len": len(self.message_log), 
                         "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
                         "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
@@ -305,7 +339,7 @@ class RaftNode:
 
     def __pop(self) -> str:
         if (self.committed_length == 0):
-            return ""
+            return "err: you dum dum theres nothing on the list!" # yg ganti ini juga dum dum diam kamu
         self.committed_length -= 1
         self.term_log.pop(0)
         return self.message_log.pop(0)
@@ -362,8 +396,48 @@ class RaftNode:
             } 
         self.__print_log(response)
         return response
+    
+    async def __send_heartbeat(self, request: Any, rpc_name: str, addr: Address) -> "json":
+        node = ServerProxy(f"http://{addr.ip}:{addr.port}")
+        json_request = json.dumps(request)
+        rpc_function = getattr(node, rpc_name)
+        try:
+            response = json.loads(rpc_function(json_request))
+        except (ConnectionRefusedError, ConnectionResetError, ConnectionError, ConnectionAbortedError):
+            self.__print_log(f"[{rpc_name}] Heartbeat Connection error")
+            response = {
+                "status": "failure",
+                "ack": False,
+                "address": {
+                    "ip":   addr.ip,
+                    "port": addr.port,
+                }
+            }
+        except socket.timeout:
+            self.__print_log(f"[{rpc_name}] Heartbeat Timeout")
+            response = {
+                "status": "failure",
+                "ack": False,
+                "address": {
+                    "ip":   addr.ip,
+                    "port": addr.port,
+                }
+            }
+        except Exception as e:
+            self.__print_log(f"[{rpc_name}] Unknown Heartbeat error : {e} at {str(addr)}")
+            response = {
+                "status": "failure",
+                "address": {
+                    "ip":   addr.ip,
+                    "port": addr.port,
+                }
+            } 
+        self.__print_log(response)
+        return response
 
+    #
     # Inter-node RPCs
+    #
     def heartbeat(self, json_request: str) -> "json":
         request = json.loads(json_request)
 
@@ -468,7 +542,7 @@ class RaftNode:
             }
             while response["ack"] == False:
                 response = self.app_execute(json_request)
-                time.sleep(1)
+                time.sleep(0.05)
             if request["method"] == "push":
                 self.commit_index_log.append(1)
         else:
