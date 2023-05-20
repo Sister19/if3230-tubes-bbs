@@ -68,7 +68,7 @@ class Client:
 
 if __name__ == "__main__":
     if len(sys.argv) != 5:
-        print("server.py <client_ip> <client_port> <server_ip> <server_port>")
+        print("client.py <client_ip> <client_port> <server_ip> <server_port>")
         exit()
 
     client_addr = Address(sys.argv[1], int(sys.argv[2]))

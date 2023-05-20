@@ -28,4 +28,4 @@ if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[3] == "-p":
         start_serving(server_addr, contact_addr, True)
     else:
-        start_serving(server_addr)
+        start_serving(server_addr, contact_addr)
