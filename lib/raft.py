@@ -176,13 +176,13 @@ class RaftNode:
     def __initialize_as_follower(self):
         self.__print_log("Initialize as follower node...")
         self.type = RaftNode.NodeType.FOLLOWER
-        self.heartbeat_timer = 0
         # self.heartbeat_thread.stop()
         self.heartbeat_thread = Thread(target=asyncio.run, args=[
                                        self.__follower_heartbeat()])
         self.heartbeat_thread.start()
 
     async def __follower_heartbeat(self):
+        self.heartbeat_timer = 0
         self.current_timeout = self.__get_random_timeout()
         while self.type == RaftNode.NodeType.FOLLOWER:
             self.heartbeat_timer += 1
@@ -190,7 +190,7 @@ class RaftNode:
                 self.__print_log("Election timeout")
                 self.__initialize_as_candidate()
                 return
-            time.sleep(1)
+            await asyncio.sleep(1)
 
     def __initialize_as_candidate(self):
         self.__print_log("Initialize as candidate node...")
