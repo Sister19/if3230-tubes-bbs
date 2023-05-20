@@ -304,6 +304,8 @@ class RaftNode:
             self.term_log.append(terms[i])
 
     def __pop(self) -> str:
+        if (self.committed_length == 0):
+            return ""
         self.committed_length -= 1
         self.term_log.pop(0)
         return self.message_log.pop(0)
