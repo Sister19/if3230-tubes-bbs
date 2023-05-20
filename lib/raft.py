@@ -1,7 +1,7 @@
 import asyncio
 from threading import Thread
 from xmlrpc.client import ServerProxy
-from typing import Any, List
+from typing import Any, List, Dict
 from enum import Enum
 from lib.struct.address import Address
 import json
@@ -21,11 +21,10 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 class RaftNode:
-    HEARTBEAT_INTERVAL = 3
-    ELECTION_TIMEOUT_MIN = 5
+    HEARTBEAT_INTERVAL = 2
+    ELECTION_TIMEOUT_MIN = 7
     ELECTION_TIMEOUT_MAX = 15
-    RPC_TIMEOUT = 5
-    FOLLOWER_TIMEOUT = 15
+    RPC_TIMEOUT = 2
 
     class AppResponse(Enum):
         SUCCESS = 1
@@ -38,20 +37,21 @@ class RaftNode:
 
     def __init__(self, addr: Address, contact_addr: Address | None, passive: bool = False):
         socket.setdefaulttimeout(RaftNode.RPC_TIMEOUT)
-        self.address:             Address = addr
-        self.type:                RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
-        self.message_log:         List[str] = []
-        self.term_log:            List[int] = []    
-        self.commit_index_log:    List[int] = []
-        self.committed_length:    int = 0
-        self.election_term:       int = 0
-        self.cluster_addr_list:   List[Address] = []
-        self.cluster_leader_addr: Address | None = None
-        self.heartbeat_timer:     int = 0
-        self.vote_count:          int = 0
-        self.voted_for:           Address | None = None
-        self.current_timeout:     int = 0
-        self.commit_index:        int = 0
+        self.address:                   Address = addr
+        self.type:                      RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
+        self.message_log:               List[str] = []
+        self.term_log:                  List[int] = []    
+        self.commit_index_log:          List[int] = []
+        self.committed_length:          int = 0
+        self.election_term:             int = 0
+        self.cluster_addr_list:         List[Address] = []
+        self.troubled_clusters:         Dict[str, Dict[str, Any]] = {}
+        self.cluster_leader_addr:       Address | None = None
+        self.heartbeat_timer:           int = 0
+        self.vote_count:                int = 0
+        self.voted_for:                 Address | None = None
+        self.current_timeout:           int = 0
+        self.commit_index:              int = 0
         if passive:
             self.type = RaftNode.NodeType.FOLLOWER
             self.__print_log("Waiting for another node to contact...")
@@ -82,26 +82,33 @@ class RaftNode:
         self.cluster_leader_addr = self.address
         self.type = RaftNode.NodeType.LEADER
         request = {
+            "cluster_addr_list": self.cluster_addr_list,
             "cluster_leader_addr": self.address,
             "election_term":       self.election_term,
             "message_log":          self.message_log,
             "commit_index":        self.commit_index,
+
         }
 
         # Send request to all nodes in cluster
         for addr in self.cluster_addr_list:
             if addr != self.address:
-                self.__send_request(request, "change_leader", addr)
+                self.__send_request(request, "heartbeat", addr)
 
         # self.heartbeat_thread.stop()
         self.heartbeat_thread = Thread(target=asyncio.run, args=[
                                        self.__leader_heartbeat()])
         self.heartbeat_thread.start()
 
+    # async def __hearbeat_to_follower(self, follower_addr: Address, request: Dict[str, Any]):
+    #     self.__print_log(f"[Leader] Sending heartbeat to {follower_addr}")
+    #     self.__send_request(request, "heartbeat", follower_addr)
+
     async def __leader_heartbeat(self):
         while self.type == RaftNode.NodeType.LEADER:
             self.__print_log("[Leader] Sending heartbeat...")
             self.__print_log(self.__log_repr())
+            tasks = []
             for addr in self.cluster_addr_list:
                 if addr != self.address:
                     request = {
@@ -112,7 +119,7 @@ class RaftNode:
                         "last_term": self.term_log[len(self.message_log) - len(self.commit_index_log) - 1] if len(self.message_log) > 0 else self.election_term,
                         "messages": self.message_log[-(len(self.commit_index_log)):] if len(self.commit_index_log) > 0 else [],
                         "last_message": self.message_log[len(self.message_log) - len(self.commit_index_log) - 1] if len(self.message_log) > 0 else "",
-                        "terms": self.term_log[-len(self.commit_index_log):] if len(self.message_log) > 0 else [],
+                        "terms": self.term_log[-len(self.commit_index_log):] if len(self.commit_index_log ) > 0 else [],
                         "leader_commit": self.committed_length,
                         "cluster_leader_addr": {
                             "ip":   self.address.ip,
@@ -120,12 +127,55 @@ class RaftNode:
                         },
                         "election_term": self.election_term,
                     }
-                    follower_response = json.loads(self.__send_request(request, "heartbeat", addr))
-                    if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
-                        self.commit_index_log[-1] += 1
+
+                    # TODO: Handle custom request here
+                    if str(addr) in self.troubled_clusters.keys():
+                        response = self.troubled_clusters[str(addr)]
+                        # When follower is zeroed (ex: cold restart)
+                        if response["message_len"] == 0 and len(self.message_log) != 0:
+                            request["prefix_len"] = 0
+                            request["messages"] = self.message_log
+                            request["terms"] = self.term_log
+                        
+                        # When follower is delayed (ex: network delay)
+                        else:
+                            for idx in range(len(self.message_log) - 1, -1, -1):
+                                if self.message_log[idx] == response["last_message"] and self.term_log[idx] == response["last_term"]:
+                                    # set the prefix_len, last_term, messages, last_message, terms
+                                    request["prefix_len"] = len(self.message_log) - idx
+                                    request["last_term"] = self.term_log[idx]
+                                    request["last_message"] = self.message_log[idx]
+                                    request["messages"] = self.message_log[idx:]
+                                    request["terms"] = self.term_log[idx:]
+                                    break
+                            # Last message not found, send all messages
+                            request["prefix_len"] = 0
+                            request["messages"] = self.message_log
+                            request["terms"] = self.term_log
+
+                    # Add to tasks list
+                    tasks.append(asyncio.create_task(self.__send_heartbeat(request, "heartbeat", addr)))
+
+            responses = await asyncio.gather(*tasks)
+
+            for response in responses:
+                # Troubled cluster, no more
+                if response["ack"] == True and ("addr" in response.keys() and response["addr"] in self.troubled_clusters.keys()):
+                    self.troubled_clusters.pop(response["addr"])
+
+                # Follower acked the message, increment commit index
+                if self.commit_index_log.__len__() > 0 and response["ack"] == True:
+                    self.commit_index_log[-1] += 1
+
+                # Troubled cluster, offer help (call 911)
+                if response["ack"] == False and response["status"] != "failure":
+                    self.troubled_clusters[str(response["addr"])] = response
+
+
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
                 self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
+                
             await asyncio.sleep(RaftNode.HEARTBEAT_INTERVAL)
 
     def __try_to_apply_membership(self, contact_addr: Address):
@@ -152,19 +202,21 @@ class RaftNode:
             time.sleep(self.RPC_TIMEOUT)
         self.message_log = response["message_log"]
         self.term_log = response["term_log"]
+        self.committed_length = response["leader_commit"]
+        self.election_term = response["election_term"]
         self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), response["cluster_addr_list"]))
         self.cluster_leader_addr = redirected_addr
 
     def __initialize_as_follower(self):
         self.__print_log("Initialize as follower node...")
         self.type = RaftNode.NodeType.FOLLOWER
-        self.heartbeat_timer = 0
         # self.heartbeat_thread.stop()
         self.heartbeat_thread = Thread(target=asyncio.run, args=[
                                        self.__follower_heartbeat()])
         self.heartbeat_thread.start()
 
     async def __follower_heartbeat(self):
+        self.heartbeat_timer = 0
         self.current_timeout = self.__get_random_timeout()
         while self.type == RaftNode.NodeType.FOLLOWER:
             self.heartbeat_timer += 1
@@ -200,6 +252,7 @@ class RaftNode:
                 "ip":   self.address.ip,
                 "port": self.address.port,
             },
+            "commit_index": self.commit_index,
         }
         accepted_addr_list = []
         for addr in self.cluster_addr_list:
@@ -212,6 +265,14 @@ class RaftNode:
                         self.__initialize_as_leader()
                         return
     
+    def __change_leader(self, request_str: str):
+        request = json.loads(request_str)
+        self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
+        self.election_term = request["election_term"]
+        self.commit_index = request["commit_index"]
+        self.__initialize_as_follower()
+
+
     #
     # External Log methods
     #
@@ -234,24 +295,33 @@ class RaftNode:
                     return json.dumps({"ack": False})
             case "sync":
                 try:
-                    if self.type != self.NodeType.LEADER:
-                        # Does some preliminary checks
-                        if self.election_term < request["curr_term"]:
-                            self.election_term = request["curr_term"]
-                        if request["curr_term"] == self.election_term:
-                            self.type = self.NodeType.FOLLOWER
-                        logOk: bool = (self.message_log.__len__() >= request["prefix_len"]) and (request["prefix_len"] == 0 or self.term_log[request["prefix_len"] - 1] == request["last_term"])
-                        if self.election_term == request["curr_term"] and logOk:
-                            self.__push(request["messages"], request["terms"], int(request["prefix_len"]))
-                            if request["leader_commit"] > self.committed_length:
-                                self.committed_length = request["leader_commit"]
-                            return json.dumps({"ack": True})
-                        return json.dumps({"ack": False})
-                    return json.dumps({"ack": False, "err": "Not a follower"})
+                    # Does some preliminary checks
+                    if self.election_term < request["curr_term"]:
+                        self.election_term = request["curr_term"]
+                    if request["curr_term"] == self.election_term:
+                        self.type = self.NodeType.FOLLOWER
+                    logOk: bool = (self.message_log.__len__() >= request["prefix_len"]) and (request["prefix_len"] == 0 or self.term_log[request["prefix_len"] - 1] == request["last_term"])
+                    if self.election_term == request["curr_term"] and logOk:
+                        self.__push(request["messages"], request["terms"], int(request["prefix_len"]))
+                        if request["leader_commit"] > self.committed_length:
+                            self.committed_length = request["leader_commit"]
+                        return json.dumps({"ack": True})
+                    return json.dumps({
+                        "ack": False, 
+                        "addr": str(self.address),
+                        "message_len": len(self.message_log), 
+                        "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
+                        "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
+                    })
                 except:
-                    return json.dumps({"ack": False})
-            case _ :
-                return json.dumps({"ack": False, "err": "Invalid method"})
+                    return json.dumps({
+                        "ack": False, 
+                        "message_len": len(self.message_log), 
+                        "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
+                        "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
+                    })
+            case _:
+                return json.dumps({"ack": False})
     #
     #   Internal Log Methods
     #
@@ -272,6 +342,8 @@ class RaftNode:
             self.term_log.append(terms[i])
 
     def __pop(self) -> str:
+        if (self.committed_length == 0):
+            return "err: you dum dum theres nothing on the list!" # yg ganti ini juga dum dum diam kamu
         self.committed_length -= 1
         self.term_log.pop(0)
         return self.message_log.pop(0)
@@ -281,7 +353,10 @@ class RaftNode:
         repr_output += "Term log    : " + str(self.term_log) + "\n"
         repr_output += "Message log : " + str(self.message_log) + "\n"
         repr_output += "Curr term   : " + str(self.election_term) + "\n"
-        repr_output += "Committed   : " + str(self.committed_length) + ""
+        repr_output += "Committed   : " + str(self.committed_length) + "\n"
+        # repr_output += "Type        : " + str(self.type) + "\n"
+        # repr_output += "Addr        : " + str(self.address) + "\n"
+        # repr_output += "Leader Addr : " + str(self.cluster_leader_addr) + ""
         return repr_output 
 
     #
@@ -298,6 +373,7 @@ class RaftNode:
             self.__print_log(f"[{rpc_name}] Connection error")
             response = {
                 "status": "failure",
+                "ack": False,
                 "address": {
                     "ip":   addr.ip,
                     "port": addr.port,
@@ -307,13 +383,52 @@ class RaftNode:
             self.__print_log(f"[{rpc_name}] Timeout")
             response = {
                 "status": "failure",
+                "ack": False,
                 "address": {
                     "ip":   addr.ip,
                     "port": addr.port,
                 }
             }
         except Exception as e:
-            self.__print_log(f"[{rpc_name}] Unknown error : {e} \nat {str(addr)}")
+            self.__print_log(f"[{rpc_name}] Unknown error : {e} at {str(addr)}")
+            response = {
+                "status": "failure",
+                "address": {
+                    "ip":   addr.ip,
+                    "port": addr.port,
+                }
+            } 
+        self.__print_log(json.dumps(response))
+        return json.dumps(response)
+    
+    async def __send_heartbeat(self, request: Any, rpc_name: str, addr: Address) -> str:
+        node = ServerProxy(f"http://{addr.ip}:{addr.port}")
+        json_request = json.dumps(request)
+        rpc_function = getattr(node, rpc_name)
+        try:
+            response = json.loads(rpc_function(json_request))
+        except (ConnectionRefusedError, ConnectionResetError, ConnectionError, ConnectionAbortedError):
+            self.__print_log(f"[{rpc_name}] Heartbeat Connection error")
+            response = {
+                "status": "failure",
+                "ack": False,
+                "address": {
+                    "ip":   addr.ip,
+                    "port": addr.port,
+                }
+            }
+        except socket.timeout:
+            self.__print_log(f"[{rpc_name}] Heartbeat Timeout")
+            response = {
+                "status": "failure",
+                "ack": False,
+                "address": {
+                    "ip":   addr.ip,
+                    "port": addr.port,
+                }
+            }
+        except Exception as e:
+            self.__print_log(f"[{rpc_name}] Unknown Heartbeat error : {e} at {str(addr)}")
             response = {
                 "status": "failure",
                 "address": {
@@ -324,21 +439,30 @@ class RaftNode:
         self.__print_log(json.dumps(response))
         return json.dumps(response)
 
+    #
     # Inter-node RPCs
+    #
     def heartbeat(self, json_request: str) -> str:
-        if (self.type == RaftNode.NodeType.FOLLOWER):
-            request = json.loads(json_request)
+        request = json.loads(json_request)
+
+        # Process the request if the term >= current term
+        if request["election_term"] >= self.election_term:
             self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), request["cluster_addr_list"]))
             self.heartbeat_timer = 0
             follower_resp = json.loads(self.app_execute(json_request))
-            if (request["election_term"] > self.election_term):
-                self.election_term = request["election_term"]
-                self.voted_for = None
-                self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
+
+            # If the term is higher, change the leader to the sender
+            if (request["election_term"] > self.election_term) or self.cluster_leader_addr is None:
+                self.__change_leader(request)
+                # self.election_term = request["election_term"]
+                # self.voted_for = None
+                # self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
             response = {
                 "status": "success",
             }
             response.update(follower_resp)
+
+        # If the term is lower, reject the request
         else:
             response = {
                 "status": "failure",
@@ -358,6 +482,8 @@ class RaftNode:
                 "cluster_addr_list": self.cluster_addr_list,
                 "message_log": self.message_log,
                 "term_log": self.term_log,
+                "election_term": self.election_term,
+                "leader_commit": self.committed_length,
             }
         else:
             response = {
@@ -372,19 +498,17 @@ class RaftNode:
     def handle_vote_request(self, json_request: str) -> str:
         request = json.loads(json_request)
         candidate_addr = Address(request["candidate_addr"]["ip"], request["candidate_addr"]["port"])
-        response = {
-            "status": "failure",
-            "message": "Election term is lower than current term"
-        }
         if self.election_term == request["election_term"]:
             response = {
                 "status": "failure",
                 "message": "Already voted for another candidate"
             }
-        if self.election_term < request["election_term"]:
+        elif self.election_term < request["election_term"]:
+            self.cluster_leader_addr = candidate_addr
             self.election_term = request["election_term"]
+            self.commit_index = request["commit_index"]
             self.voted_for = candidate_addr
-            self.heartbeat_timer = 0
+            self.__initialize_as_follower()
             response = {
                 "status": "success",
                 "address": {
@@ -392,17 +516,22 @@ class RaftNode:
                     "port": candidate_addr.port,
                 }
             }
+        else :
+            response = {
+            "status": "failure",
+            "message": "Election term is lower than current term"
+        }
         return json.dumps(response)
     
-    def change_leader(self, json_request: str) -> str:
-        request = json.loads(json_request)
-        self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
-        self.election_term = request["election_term"]
-        self.scommit_index = request["commit_index"]
-        self.type = RaftNode.NodeType.FOLLOWER
-        self.__initialize_as_follower()
-        response = {"status": "success"}
-        return json.dumps(response)
+    # def change_leader(self, json_request: str) -> "json":
+    #     request = json.loads(json_request)
+    #     self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
+    #     self.election_term = request["election_term"]
+        # self.scommit_index = request["commit_index"]
+    #     self.type = RaftNode.NodeType.FOLLOWER
+    #     self.__initialize_as_follower()
+    #     response = {"status": "success"}
+    #     return json.dumps(response)
 
     # Client RPCs
     def execute(self, json_request: str) -> str:
