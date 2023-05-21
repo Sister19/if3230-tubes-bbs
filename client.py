@@ -28,7 +28,7 @@ class Client:
         rpc_function = getattr(node, rpc_name)
         try:
             response = json.loads(rpc_function(json_request))
-            print(response)
+            # print(response)
         except:
             response = {
                 "status": "failure",
@@ -57,6 +57,10 @@ class Client:
         response = self.__send_request(request, "execute", self.server_addr)
         return response
 
+    def request_log(self) -> "json":
+        response = self.__send_request(None, "request_log", self.server_addr)
+        return response
+
 if __name__ == "__main__":
     if len(sys.argv) != 5:
         print("server.py <client_ip> <client_port> <server_ip> <server_port>")
@@ -80,7 +84,12 @@ if __name__ == "__main__":
 
             case c if c in ["dequeue", "deq"]:
                 # receive message
-                print("receiving message", client.dequeue())
+                client.dequeue()
+                print("Dequeing message")
+
+            case c if c in ["log", "request_log"]:
+                print("requesting log..\n" + client.request_log()["log"])
+
             case "node":
                 if user_input.split(" ")[1] == "status":
                     print("Server node at", str(client))
@@ -95,6 +104,7 @@ if __name__ == "__main__":
                 print('dequeue                  :           dequeue a message')
                 print('node status              :           show current server node')
                 print('node change <ip> <port>  :           change server node')
+                print('request_log              :           request log')
                 print('exit                     :           exit the program')
             case _:
                 print("unknown command")
