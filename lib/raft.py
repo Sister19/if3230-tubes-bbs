@@ -35,8 +35,9 @@ class RaftNode:
         CANDIDATE = 2
         FOLLOWER = 3
 
-    def __init__(self, addr: Address, contact_addr: Address = None, passive: bool = False):
+    def __init__(self, application: Any, addr: Address, contact_addr: Address = None, passive: bool = False):
         socket.setdefaulttimeout(RaftNode.RPC_TIMEOUT)
+        self.app:                       Any = application
         self.address:                   Address = addr
         self.type:                      RaftNode.NodeType = None
         self.message_log:               List[str] = []
@@ -129,7 +130,6 @@ class RaftNode:
                         "election_term": self.election_term,
                     }
 
-                    # TODO: Handle custom request here
                     if str(addr) in self.troubled_clusters.keys():
                         response = self.troubled_clusters[str(addr)]
                         # When follower is zeroed (ex: cold restart)
@@ -174,6 +174,10 @@ class RaftNode:
 
 
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
+                for i in range(self.committed_length, self.committed_length + len(self.commit_index_log)):
+                        method = self.message_log[i].split("(")[0]
+                        parameter = self.message_log[i].split("(")[1].split(")")[0].replace('"', "")
+                        self.__app_execute(method, parameter)
                 self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
                 
@@ -281,7 +285,10 @@ class RaftNode:
         self.voted_for = (self.election_term, self.cluster_leader_addr)
         self.commit_index = request["commit_index"]
         self.__initialize_as_follower()
-
+        
+    def __app_execute(self, method: str, params: Any):
+        function = getattr(self.app, "push" if method == "enqueue" else "pop" if method == "dequeue" else None)
+        return function(params)
 
     #
     # External Log methods
@@ -291,16 +298,14 @@ class RaftNode:
         # print("Type??", type(json_request), "at", str(self.address))
         request = json.loads(json_request)
         match request["method"]:
-            case "push":
+            case inp if inp in ["enqueue", "dequeue"]:
                 try:
-                    self.__push(request["params"], [self.election_term], self.message_log.__len__())
+                    if request["method"] == "enqueue":
+                        log_msg = 'enqueue("' + request["params"][0] + '")'
+                    else:
+                        log_msg = "dequeue()"
+                    self.__push([log_msg], [self.election_term], self.message_log.__len__())
                     return {"ack": True}
-                except:
-                    return {"ack": False}
-            case "pop":
-                try:
-                    response = {"ack": True, "result": self.__pop()}
-                    return response
                 except:
                     return {"ack": False}
             case "sync":
@@ -314,6 +319,10 @@ class RaftNode:
                     if self.election_term == request["curr_term"] and logOk:
                         self.__push(request["messages"], request["terms"], int(request["prefix_len"]))
                         if request["leader_commit"] > self.committed_length:
+                            for i in range(self.committed_length, request["leader_commit"]):
+                                method = self.message_log[i].split("(")[0]
+                                parameter = self.message_log[i].split("(")[1].split(")")[0].replace('"', "")
+                                self.__app_execute(method, parameter)
                             self.committed_length = request["leader_commit"]
                         return json.dumps({"ack": True})
                     return json.dumps({
@@ -363,7 +372,8 @@ class RaftNode:
         repr_output += "Message log : " + str(self.message_log) + "\n"
         repr_output += "Curr term   : " + str(self.election_term) + "\n"
         repr_output += "Committed   : " + str(self.committed_length) + "\n"
-        # repr_output += "Type        : " + str(self.type) + "\n"
+        repr_output += "Queue       : " + str(self.app)
+        # repr_output += "\nType        : " + str(self.type) + "\n"
         # repr_output += "Addr        : " + str(self.address) + "\n"
         # repr_output += "Leader Addr : " + str(self.cluster_leader_addr) + ""
         return repr_output 
@@ -565,7 +575,7 @@ class RaftNode:
             while response["ack"] == False:
                 response = self.app_execute(json_request)
                 time.sleep(0.05)
-            if request["method"] == "push":
+            if request["method"] in ["enqueue", "dequeue"]:
                 self.commit_index_log.append(1)
         else:
             response = self.__send_request(json.loads(json_request), "execute", self.cluster_leader_addr)

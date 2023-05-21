@@ -12,7 +12,7 @@ class MessageQueue:
         self.queue.append(message)
         return {"status": self.Response.SUCCESS.value}
 
-    def pop(self) -> str:
+    def pop(self, _: any) -> str:
         return {"status": self.Response.SUCCESS.value, "result": self.queue.pop(0)}
 
     def is_empty(self) -> bool:

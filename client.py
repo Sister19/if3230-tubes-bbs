@@ -44,7 +44,7 @@ class Client:
     #
     def enqueue(self, message: str) -> "json":
         request = {
-            "method": "push",
+            "method": "enqueue",
             "params": [message],
         }
         response = self.__send_request(request, "execute", self.server_addr)
@@ -52,7 +52,7 @@ class Client:
 
     def dequeue(self) -> "json":
         request = {
-            "method": "pop",
+            "method": "dequeue",
         }
         response = self.__send_request(request, "execute", self.server_addr)
         return response
