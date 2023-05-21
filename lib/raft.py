@@ -1,5 +1,5 @@
 import asyncio
-from threading import Thread
+from threading import Thread, Event
 from xmlrpc.client import ServerProxy
 from typing import Any, List, Dict
 from enum import Enum
@@ -8,6 +8,7 @@ import json
 import socket
 import time
 import random
+import signal
 
 class bcolors:
     HEADER = '\033[95m'
@@ -52,6 +53,15 @@ class RaftNode:
         self.voted_for:                 Address | None = None
         self.current_timeout:           int = 0
         self.commit_index:              int = 0
+
+        # register sigint
+        signal.signal(signal.SIGINT, self.__sigint_handler)
+        # register sigterm (kill)
+        signal.signal(signal.SIGTERM, self.__sigint_handler)
+
+        # register event
+        self.event = Event()
+
         if passive:
             self.type = RaftNode.NodeType.FOLLOWER
             self.__print_log("Waiting for another node to contact...")
@@ -62,6 +72,10 @@ class RaftNode:
         else:
             self.__try_to_apply_membership(contact_addr)
             self.__initialize_as_follower()
+
+    def __sigint_handler(self, sig, frame):
+        self.__print_log("SIGINT received, shutting down...")
+        self.event.set()
     
     #
     #   Internal Raft Node methods
@@ -97,15 +111,24 @@ class RaftNode:
 
         # self.heartbeat_thread.stop()
         self.heartbeat_thread = Thread(target=asyncio.run, args=[
-                                       self.__leader_heartbeat()])
+                                       self.__leader_heartbeat(self.event)])
         self.heartbeat_thread.start()
+        
+        # set event on sigint
+        while not self.event.is_set():
+            pass
+
+        self.__print_log("Shutting down...")
+        self.heartbeat_thread.join()
+        exit()
+
 
     # async def __hearbeat_to_follower(self, follower_addr: Address, request: Dict[str, Any]):
     #     self.__print_log(f"[Leader] Sending heartbeat to {follower_addr}")
     #     self.__send_request(request, "heartbeat", follower_addr)
 
-    async def __leader_heartbeat(self):
-        while self.type == RaftNode.NodeType.LEADER:
+    async def __leader_heartbeat(self, event: Event):
+        while self.type == RaftNode.NodeType.LEADER and not event.is_set():
             self.__print_log("[Leader] Sending heartbeat...")
             self.__print_log(self.__log_repr())
             tasks = []
@@ -176,7 +199,7 @@ class RaftNode:
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
                 self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
-                
+            
             await asyncio.sleep(RaftNode.HEARTBEAT_INTERVAL)
 
     def __try_to_apply_membership(self, contact_addr: Address):
@@ -215,13 +238,21 @@ class RaftNode:
         self.type = RaftNode.NodeType.FOLLOWER
         # self.heartbeat_thread.stop()
         self.heartbeat_thread = Thread(target=asyncio.run, args=[
-                                       self.__follower_heartbeat()])
+                                       self.__follower_heartbeat(self.event)])
         self.heartbeat_thread.start()
 
-    async def __follower_heartbeat(self):
+        # set event on sigint
+        while not self.event.is_set():
+            pass
+
+        self.__print_log("Shutting down...")
+        self.heartbeat_thread.join()
+        exit()
+
+    async def __follower_heartbeat(self, event: Event):
         self.heartbeat_timer = 0
         self.current_timeout = self.__get_random_timeout()
-        while self.type == RaftNode.NodeType.FOLLOWER:
+        while self.type == RaftNode.NodeType.FOLLOWER and not event.is_set():
             self.heartbeat_timer += 1
             if self.heartbeat_timer >= self.current_timeout:
                 self.__print_log("Election timeout")
@@ -234,12 +265,20 @@ class RaftNode:
         self.type = RaftNode.NodeType.CANDIDATE
         # self.heartbeat_thread.stop()
         self.heartbeat_thread = Thread(target=asyncio.run, args=[
-                                        self.__candidate_heartbeat()])
+                                        self.__candidate_heartbeat(self.event)])
         self.heartbeat_thread.start()
 
+        # set event on sigint
+        while not self.event.is_set():
+            pass
 
-    async def __candidate_heartbeat(self):
-        while self.type == RaftNode.NodeType.CANDIDATE:
+        self.__print_log("Shutting down...")
+        self.heartbeat_thread.join()
+        exit()
+
+
+    async def __candidate_heartbeat(self, event: Event):
+        while self.type == RaftNode.NodeType.CANDIDATE and not event.is_set():
             self.election_term += 1
             self.heartbeat_timer = 0
             self.voted_for = self.address
