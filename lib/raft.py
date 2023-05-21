@@ -38,7 +38,7 @@ class RaftNode:
     def __init__(self, addr: Address, contact_addr: Address = None, passive: bool = False):
         socket.setdefaulttimeout(RaftNode.RPC_TIMEOUT)
         self.address:                   Address = addr
-        self.type:                      RaftNode.NodeType = RaftNode.NodeType.FOLLOWER
+        self.type:                      RaftNode.NodeType = None
         self.message_log:               List[str] = []
         self.term_log:                  List[int] = []    
         self.commit_index_log:          List[int] = []
@@ -88,7 +88,7 @@ class RaftNode:
             "election_term":       self.election_term,
             "message_log":          self.message_log,
             "commit_index":        self.commit_index,
-
+            "method":              "sync"
         }
 
         # Send request to all nodes in cluster
@@ -209,11 +209,11 @@ class RaftNode:
 
     def __initialize_as_follower(self):
         self.__print_log("Initialize as follower node...")
-        self.type = RaftNode.NodeType.FOLLOWER
-        # self.heartbeat_thread.stop()
-        self.heartbeat_thread = Thread(target=asyncio.run, args=[
-                                       self.__follower_heartbeat()])
-        self.heartbeat_thread.start()
+        if (self.type != RaftNode.NodeType.FOLLOWER):
+            self.type = RaftNode.NodeType.FOLLOWER
+            self.heartbeat_thread = Thread(target=asyncio.run, args=[
+                                        self.__follower_heartbeat()])
+            self.heartbeat_thread.start()
 
     async def __follower_heartbeat(self):
         self.heartbeat_timer = 0
@@ -250,6 +250,7 @@ class RaftNode:
                 self.heartbeat_timer += curr_time - prev_time
                 prev_time = curr_time
                 print(bcolors.OKBLUE, "Timer:", self.heartbeat_timer, bcolors.ENDC)
+                await asyncio.sleep(self.HEARTBEAT_INTERVAL)
 
     async def __send_vote_request(self):
         request = {
@@ -270,7 +271,7 @@ class RaftNode:
                     if response["status"] == "success":
                         self.accepted_addr_list.append(addr)
                         self.vote_count += 1
-                if self.vote_count > len(self.cluster_addr_list) / 2:
+                if self.vote_count > len(self.cluster_addr_list) / 2 and self.type == RaftNode.NodeType.CANDIDATE:
                     self.__initialize_as_leader()
  
     
@@ -329,6 +330,7 @@ class RaftNode:
                         "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
                         "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
                     })
+            
     #
     #   Internal Log Methods
     #
