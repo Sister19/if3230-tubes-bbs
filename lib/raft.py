@@ -21,10 +21,10 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 class RaftNode:
-    HEARTBEAT_INTERVAL = 2
-    ELECTION_TIMEOUT_MIN = 7
-    ELECTION_TIMEOUT_MAX = 15
-    RPC_TIMEOUT = 2
+    HEARTBEAT_INTERVAL = 3
+    ELECTION_TIMEOUT_MIN = 20
+    ELECTION_TIMEOUT_MAX = 40    
+    RPC_TIMEOUT = 3
 
     class AppResponse(Enum):
         SUCCESS = 1
@@ -50,6 +50,7 @@ class RaftNode:
         self.heartbeat_timer:           int = 0
         self.vote_count:                int = 0
         self.voted_for:                 tuple[int, Address] = (0, None)
+        self.accepted_addr_list:        List[int] = []
         self.current_timeout:           int = 0
         self.commit_index:              int = 0
         if passive:
@@ -219,6 +220,7 @@ class RaftNode:
         self.current_timeout = self.__get_random_timeout()
         while self.type == RaftNode.NodeType.FOLLOWER:
             self.heartbeat_timer += 1
+            print(bcolors.OKBLUE, "Timer:", self.heartbeat_timer, bcolors.ENDC)
             if self.heartbeat_timer >= self.current_timeout:
                 self.__print_log("Election timeout")
                 self.__initialize_as_candidate()
@@ -236,15 +238,20 @@ class RaftNode:
 
     async def __candidate_heartbeat(self):
         while self.type == RaftNode.NodeType.CANDIDATE:
-            self.election_term += 1
             self.heartbeat_timer = 0
+            self.current_timeout = self.__get_random_timeout()
+            self.election_term += 1
             self.voted_for = (self.election_term, self.address)
             self.vote_count = 1
-            self.__send_vote_request()
-            self.current_timeout = self.__get_random_timeout()
-            await asyncio.sleep(self.current_timeout)
+            prev_time = time.time()
+            while self.heartbeat_timer < self.current_timeout and self.type == RaftNode.NodeType.CANDIDATE:
+                await self.__send_vote_request()
+                curr_time = time.time()
+                self.heartbeat_timer += curr_time - prev_time
+                prev_time = curr_time
+                print(bcolors.OKBLUE, "Timer:", self.heartbeat_timer, bcolors.ENDC)
 
-    def __send_vote_request(self):
+    async def __send_vote_request(self):
         request = {
             "election_term": self.election_term,
             "candidate_addr": {
@@ -253,16 +260,19 @@ class RaftNode:
             },
             "commit_index": self.commit_index,
         }
-        accepted_addr_list = []
+        self.accepted_addr_list = []
         for addr in self.cluster_addr_list:
-            if addr != self.address and addr not in accepted_addr_list:
-                response = self.__send_request(request, "handle_vote_request", addr)
-                if response["status"] == "success":
-                    accepted_addr_list.append(addr)
-                    self.vote_count += 1
-                    if self.vote_count > len(self.cluster_addr_list) / 2:
-                        self.__initialize_as_leader()
-                        return
+            if addr != self.address and addr not in self.accepted_addr_list:
+                tasks = []
+                tasks.append(asyncio.create_task(self.__send_heartbeat(request, "handle_vote_request", addr)))
+                responses = await asyncio.gather(*tasks)
+                for response in responses:
+                    if response["status"] == "success":
+                        self.accepted_addr_list.append(addr)
+                        self.vote_count += 1
+                if self.vote_count > len(self.cluster_addr_list) / 2:
+                    self.__initialize_as_leader()
+ 
     
     def __change_leader(self, request: json):
         self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
@@ -364,6 +374,13 @@ class RaftNode:
         node = ServerProxy(f"http://{addr.ip}:{addr.port}")
         json_request = json.dumps(request)
         rpc_function = getattr(node, rpc_name)
+        response = {
+            "status": "failure",
+            "address": {
+                "ip":   addr.ip,
+                "port": addr.port,
+            }
+        } 
         try:
             response = json.loads(rpc_function(json_request))
         except (ConnectionRefusedError, ConnectionResetError, ConnectionError, ConnectionAbortedError):
@@ -387,7 +404,7 @@ class RaftNode:
                 }
             }
         except Exception as e:
-            self.__print_log(f"[{rpc_name}] Unknown error : {e} at {str(addr)}")
+            self.__print_log(f"[{rpc_name}] Unknown Heartbeat error : {e} at {str(addr)}")
             response = {
                 "status": "failure",
                 "address": {
@@ -395,7 +412,7 @@ class RaftNode:
                     "port": addr.port,
                 }
             } 
-        self.__print_log(response)
+        print(f"{bcolors.OKBLUE} [<- {addr} ] {response} {bcolors.ENDC}")
         return response
     
     async def __send_heartbeat(self, request: Any, rpc_name: str, addr: Address) -> "json":
@@ -433,7 +450,8 @@ class RaftNode:
                     "port": addr.port,
                 }
             } 
-        self.__print_log(response)
+        # self.__print_log(response)
+        print(f"{bcolors.OKBLUE} [<- {addr} ] {response} {bcolors.ENDC}")
         return response
 
     #
@@ -513,6 +531,7 @@ class RaftNode:
                     "port": candidate_addr.port,
                 }
             }
+            print(f"{bcolors.WARNING} Voted for {candidate_addr} {bcolors.ENDC}")
         else :
             response = {
             "status": "failure",
