@@ -175,6 +175,8 @@ class RaftNode:
 
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
                 for i in range(self.committed_length, self.committed_length + len(self.commit_index_log)):
+                        if i > len(self.message_log) - 1:
+                            break
                         method = self.message_log[i].split("(")[0]
                         parameter = self.message_log[i].split("(")[1].split(")")[0].replace('"', "")
                         self.__app_execute(method, parameter)
@@ -213,16 +215,16 @@ class RaftNode:
 
     def __initialize_as_follower(self):
         self.__print_log("Initialize as follower node...")
-        if (self.type != RaftNode.NodeType.FOLLOWER):
-            self.type = RaftNode.NodeType.FOLLOWER
-            self.heartbeat_thread = Thread(target=asyncio.run, args=[
-                                        self.__follower_heartbeat()])
-            self.heartbeat_thread.start()
+        self.type = RaftNode.NodeType.FOLLOWER
+        self.heartbeat_thread = Thread(target=asyncio.run, args=[
+                                    self.__follower_heartbeat()])
+        self.heartbeat_thread.start()
 
     async def __follower_heartbeat(self):
         self.heartbeat_timer = 0
         self.current_timeout = self.__get_random_timeout()
-        while self.type == RaftNode.NodeType.FOLLOWER:
+        current_term = self.election_term
+        while self.type == RaftNode.NodeType.FOLLOWER and current_term == self.election_term:
             self.heartbeat_timer += 1
             print(bcolors.OKBLUE, "Timer:", self.heartbeat_timer, bcolors.ENDC)
             if self.heartbeat_timer >= self.current_timeout:
@@ -249,11 +251,11 @@ class RaftNode:
             self.vote_count = 1
             prev_time = time.time()
             while self.heartbeat_timer < self.current_timeout and self.type == RaftNode.NodeType.CANDIDATE:
+                print(bcolors.OKBLUE, "Timer:", self.heartbeat_timer, bcolors.ENDC)
                 await self.__send_vote_request()
                 curr_time = time.time()
                 self.heartbeat_timer += curr_time - prev_time
                 prev_time = curr_time
-                print(bcolors.OKBLUE, "Timer:", self.heartbeat_timer, bcolors.ENDC)
                 await asyncio.sleep(self.HEARTBEAT_INTERVAL)
 
     async def __send_vote_request(self):
@@ -416,7 +418,7 @@ class RaftNode:
                 }
             }
         except Exception as e:
-            self.__print_log(f"[{rpc_name}] Unknown Heartbeat error : {e} at {str(addr)}")
+            self.__print_log(f"[{rpc_name}] Unknown error : {e} at {str(addr)}")
             response = {
                 "status": "failure",
                 "address": {
@@ -525,7 +527,16 @@ class RaftNode:
     def handle_vote_request(self, json_request: str) -> "json":
         request = json.loads(json_request)
         candidate_addr = Address(request["candidate_addr"]["ip"], request["candidate_addr"]["port"])
-        if self.election_term == request["election_term"] or request["election_term"] <= self.voted_for[0]:
+        if self.election_term == request["election_term"] and self.voted_for[0] == request["election_term"] and self.voted_for[1] == candidate_addr:
+            self.heartbeat_timer = 0
+            response = {
+                "status": "success",
+                "address": {
+                    "ip":   candidate_addr.ip,
+                    "port": candidate_addr.port,
+                }
+            }
+        elif self.election_term == request["election_term"] or request["election_term"] <= self.voted_for[0]:
             response = {
                 "status": "failure",
                 "message": "Already voted for another candidate"
@@ -548,6 +559,36 @@ class RaftNode:
             response = {
             "status": "failure",
             "message": "Election term is lower than current term"
+        }
+        return json.dumps(response)
+    
+    def get_node_info(self, json_request: str) -> "json":
+        request = json.loads(json_request)
+        response = {
+            "status": "success",
+            "election_term": self.election_term,
+            "cluster_leader_addr": {
+                "ip":   self.cluster_leader_addr.ip,
+                "port": self.cluster_leader_addr.port,
+            },
+            "cluster_addr_list": self.cluster_addr_list,
+            "message_log": self.message_log,
+            "term_log": self.term_log,
+            "commit_index": self.commit_index,
+            "leader_commit": self.committed_length,
+            "type": self.type.value,
+            "voted_for": {
+                "election_term": self.voted_for[0],
+                "candidate_addr": {
+                    "ip":   self.voted_for[1].ip,
+                    "port": self.voted_for[1].port,
+                }
+            },
+            "commit_index": self.commit_index,
+            "commit_index_log": self.commit_index_log,
+            "committed_length": self.committed_length,
+            "message_log": self.message_log,
+            "term_log": self.term_log,
         }
         return json.dumps(response)
     
