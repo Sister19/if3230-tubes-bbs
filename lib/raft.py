@@ -125,7 +125,8 @@ class RaftNode:
                     follower_response = self.__send_request(request, "heartbeat", addr)
                     if follower_response["status"] == "failure":
                         continue
-                    if follower_response["ack"] == False and follower_response["status"] != "failure":
+
+                    elif follower_response["ack"] == False and follower_response["status"] != "failure":
                         # Does error correcting
 
                         # When follower is zeroed (ex: cold restart)
@@ -133,13 +134,19 @@ class RaftNode:
                             request["prefix_len"] = 0
                             request["messages"] = self.message_log
                             request["terms"] = self.term_log
-                            follower_response = self.__send_request(request, "heartbeat", addr)
 
-                        # TODO: When follower is behind
+                        # When follower is behind
+                        elif follower_response["message_len"] < len(self.message_log) != 0:
+                            prefix_length = len([_ for _ in follower_response["messages"] if _ in self.message_log])
+                            request["prefix_len"] = prefix_length
+                            request["messages"] = self.message_log[prefix_length:]
+                            request["terms"] = self.term_log[prefix_length:]
+
+                        follower_response = self.__send_request(request, "heartbeat", addr)
+
                     if self.commit_index_log.__len__() > 0 and follower_response["ack"] == True:
                         self.commit_index_log[-1] += 1
 
-                        pass
             if self.commit_index_log.__len__() > 0 and (self.commit_index_log[-1] >= (len(self.cluster_addr_list) // 2) + 1):
                 self.committed_length += len(self.commit_index_log)
                 self.commit_index_log = []
@@ -272,14 +279,16 @@ class RaftNode:
                             self.committed_length = request["leader_commit"]
                         return json.dumps({"ack": True})
                     return json.dumps({
-                        "ack": False, 
+                        "ack": False,
+                        "messages": self.message_log,
                         "message_len": len(self.message_log), 
                         "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
                         "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
                     })
                 except:
                     return json.dumps({
-                        "ack": False, 
+                        "ack": False,
+                        "messages": self.message_log,
                         "message_len": len(self.message_log), 
                         "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
                         "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
