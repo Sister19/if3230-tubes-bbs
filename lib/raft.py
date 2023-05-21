@@ -49,7 +49,7 @@ class RaftNode:
         self.cluster_leader_addr:       Address = None
         self.heartbeat_timer:           int = 0
         self.vote_count:                int = 0
-        self.voted_for:                 Address = None
+        self.voted_for:                 tuple[int, Address] = (0, None)
         self.current_timeout:           int = 0
         self.commit_index:              int = 0
         if passive:
@@ -238,7 +238,7 @@ class RaftNode:
         while self.type == RaftNode.NodeType.CANDIDATE:
             self.election_term += 1
             self.heartbeat_timer = 0
-            self.voted_for = self.address
+            self.voted_for = (self.election_term, self.address)
             self.vote_count = 1
             self.__send_vote_request()
             self.current_timeout = self.__get_random_timeout()
@@ -267,6 +267,7 @@ class RaftNode:
     def __change_leader(self, request: json):
         self.cluster_leader_addr = Address(request["cluster_leader_addr"]["ip"], request["cluster_leader_addr"]["port"])
         self.election_term = request["election_term"]
+        self.voted_for = (self.election_term, self.cluster_leader_addr)
         self.commit_index = request["commit_index"]
         self.__initialize_as_follower()
 
@@ -448,7 +449,7 @@ class RaftNode:
             follower_resp = json.loads(self.app_execute(json_request))
 
             # If the term is higher, change the leader to the sender
-            if (request["election_term"] > self.election_term) or self.cluster_leader_addr is None:
+            if (request["election_term"] > self.election_term and request["election_term"] > self.voted_for[0]) or self.cluster_leader_addr is None:
                 self.__change_leader(request)
                 # self.election_term = request["election_term"]
                 # self.voted_for = None
@@ -494,7 +495,7 @@ class RaftNode:
     def handle_vote_request(self, json_request: str) -> "json":
         request = json.loads(json_request)
         candidate_addr = Address(request["candidate_addr"]["ip"], request["candidate_addr"]["port"])
-        if self.election_term == request["election_term"]:
+        if self.election_term == request["election_term"] or request["election_term"] <= self.voted_for[0]:
             response = {
                 "status": "failure",
                 "message": "Already voted for another candidate"
@@ -503,7 +504,7 @@ class RaftNode:
             self.cluster_leader_addr = candidate_addr
             self.election_term = request["election_term"]
             self.commit_index = request["commit_index"]
-            self.voted_for = candidate_addr
+            self.voted_for = (self.election_term, candidate_addr)
             self.__initialize_as_follower()
             response = {
                 "status": "success",
