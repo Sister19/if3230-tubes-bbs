@@ -562,6 +562,15 @@ class RaftNode:
     #     return json.dumps(response)
 
     # Client RPCs
+    def request_log(self, _: any):
+        if self.type == RaftNode.NodeType.LEADER:
+            response = "[===]              ~Log~              [===]\n"
+            for i in range(len(self.message_log)):
+                response += "Term: " + str(self.term_log[i]) + " | Method: " + str(self.message_log[i]) + "\n"
+        else:
+            response = "Err: Not a leader" # Might Do: Redirect to leader, cant seem to figure out how
+        return json.dumps({"log": response})
+
     def execute(self, json_request: str) -> "json":
         response = {
             "status": self.AppResponse.FAILURE.value,
