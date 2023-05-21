@@ -160,15 +160,15 @@ class RaftNode:
 
             for response in responses:
                 # Troubled cluster, no more
-                if response["ack"] == True and ("addr" in response.keys() and response["addr"] in self.troubled_clusters.keys()):
+                if ("ack" in response.keys() and response["ack"] == True) and ("addr" in response.keys() and response["addr"] in self.troubled_clusters.keys()):
                     self.troubled_clusters.pop(response["addr"])
 
                 # Follower acked the message, increment commit index
-                if self.commit_index_log.__len__() > 0 and response["ack"] == True:
+                if self.commit_index_log.__len__() > 0 and ("ack" in response.keys() and response["ack"] == True):
                     self.commit_index_log[-1] += 1
 
                 # Troubled cluster, offer help (call 911)
-                if response["ack"] == False and response["status"] != "failure":
+                if ("ack" in response.keys() and response["ack"] == False) and ("status" in response.keys() and response["status"] != "failure"):
                     self.troubled_clusters[str(response["addr"])] = response
 
 
