@@ -26,10 +26,22 @@ class Client:
         node = ServerProxy(f"http://{addr.ip}:{addr.port}")
         json_request = json.dumps(request)
         rpc_function = getattr(node, rpc_name)
+        response = {
+            "status": "redirected",
+            "address": {
+                "ip":   addr.ip,
+                "port": addr.port,
+            }
+        }
         try:
-            response = json.loads(rpc_function(json_request))
-            # print(response)
-        except:
+            while response["status"] == "redirected":
+                response = json.loads(rpc_function(json_request))
+                print(response)
+                if response["status"] == "redirected":
+                    addr = Address(response["address"]["ip"], response["address"]["port"])
+                    rpc_function = getattr(ServerProxy(f"http://{addr.ip}:{addr.port}"), rpc_name)
+        except Exception as e:
+            print("Error :", e)
             response = {
                 "status": "failure",
                 "address": {
@@ -37,6 +49,7 @@ class Client:
                     "port": addr.port,
                 }
             }
+            print(response)
         return response
     
     #
@@ -59,6 +72,13 @@ class Client:
 
     def request_log(self) -> "json":
         response = self.__send_request(None, "request_log", self.server_addr)
+        return response
+    
+    def status(self) -> "json":
+        request = {
+            "method": "status",
+        }
+        response = self.__send_request(request, "get_node_status", self.server_addr)
         return response
 
 if __name__ == "__main__":
@@ -84,15 +104,21 @@ if __name__ == "__main__":
 
             case c if c in ["dequeue", "deq"]:
                 # receive message
-                client.dequeue()
                 print("Dequeing message")
+                client.dequeue()
 
             case c if c in ["log", "request_log"]:
-                print("requesting log..\n" + client.request_log()["log"])
+                print("requesting log..")
+                response = client.request_log()
+                if response["status"] == "success":
+                    print(response["log"])
+                else:
+                    print("request log failed")
 
             case "node":
                 if user_input.split(" ")[1] == "status":
                     print("Server node at", str(client))
+                    print(client.status())
                 elif user_input.split(" ")[1] == "change":
                     temp_addr = Address(user_input.split(" ")[2], int(user_input.split(" ")[3]))
                     client.change_server(temp_addr)
@@ -102,7 +128,7 @@ if __name__ == "__main__":
             case "help":
                 print('enqueue <message>        :           enqueue a message')
                 print('dequeue                  :           dequeue a message')
-                print('node status              :           show current server node')
+                print('node status              :           show current server node status')
                 print('node change <ip> <port>  :           change server node')
                 print('request_log              :           request log')
                 print('exit                     :           exit the program')

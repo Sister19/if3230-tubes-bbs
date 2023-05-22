@@ -267,18 +267,19 @@ class RaftNode:
             },
             "commit_index": self.commit_index,
         }
+        tasks = []
         self.accepted_addr_list = []
         for addr in self.cluster_addr_list:
-            if addr != self.address and addr not in self.accepted_addr_list:
-                tasks = []
+            if addr != self.address:
                 tasks.append(asyncio.create_task(self.__send_heartbeat(request, "handle_vote_request", addr)))
-                responses = await asyncio.gather(*tasks)
-                for response in responses:
-                    if response["status"] == "success":
-                        self.accepted_addr_list.append(addr)
-                        self.vote_count += 1
-                if self.vote_count > len(self.cluster_addr_list) / 2 and self.type == RaftNode.NodeType.CANDIDATE:
-                    self.__initialize_as_leader()
+        responses = await asyncio.gather(*tasks)
+        for response in responses:
+            resp_addr = Address(response["address"]["ip"], response["address"]["port"])
+            if response["status"] == "success" and resp_addr not in self.accepted_addr_list :
+                self.accepted_addr_list.append(resp_addr)
+                self.vote_count += 1
+        if self.vote_count > len(self.cluster_addr_list) / 2 and self.type == RaftNode.NodeType.CANDIDATE:
+            self.__initialize_as_leader()
  
     
     def __change_leader(self, request: json):
@@ -307,9 +308,9 @@ class RaftNode:
                     else:
                         log_msg = "dequeue()"
                     self.__push([log_msg], [self.election_term], self.message_log.__len__())
-                    return {"ack": True}
+                    return {"status" : "success", "ack": True}
                 except:
-                    return {"ack": False}
+                    return {"status" : "success", "ack": False}
             case "sync":
                 try:
                     # Does some preliminary checks
@@ -326,21 +327,24 @@ class RaftNode:
                                 parameter = self.message_log[i].split("(")[1].split(")")[0].replace('"', "")
                                 self.__app_execute(method, parameter)
                             self.committed_length = request["leader_commit"]
-                        return json.dumps({"ack": True})
-                    return json.dumps({
+                        return {"status" : "success", "ack": True}
+                    return {
+                        "status" : "success",
                         "ack": False, 
                         "addr": str(self.address),
                         "message_len": len(self.message_log), 
                         "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
                         "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
-                    })
+                    }
                 except:
-                    return json.dumps({
+                    return {
+                        "status" : "success",
                         "ack": False, 
                         "message_len": len(self.message_log), 
                         "last_message": self.message_log[-1] if len(self.message_log) > 0 else "", 
                         "last_term": self.term_log[-1] if len(self.term_log) > 0 else 0
-                    })
+                    }
+        
             
     #
     #   Internal Log Methods
@@ -478,7 +482,7 @@ class RaftNode:
         if request["election_term"] >= self.election_term:
             self.cluster_addr_list = list(map(lambda addr: Address(addr["ip"], addr["port"]), request["cluster_addr_list"]))
             self.heartbeat_timer = 0
-            follower_resp = json.loads(self.app_execute(json_request))
+            follower_resp = self.app_execute(json_request)
 
             # If the term is higher, change the leader to the sender
             if (request["election_term"] > self.election_term and request["election_term"] > self.voted_for[0]) or self.cluster_leader_addr is None:
@@ -532,14 +536,18 @@ class RaftNode:
             response = {
                 "status": "success",
                 "address": {
-                    "ip":   candidate_addr.ip,
-                    "port": candidate_addr.port,
+                    "ip":   self.address.ip,
+                    "port": self.address.port,
                 }
             }
         elif self.election_term == request["election_term"] or request["election_term"] <= self.voted_for[0]:
             response = {
                 "status": "failure",
-                "message": "Already voted for another candidate"
+                "message": "Already voted for another candidate",
+                "address": {
+                    "ip":   self.address.ip,
+                    "port": self.address.port,
+                }
             }
         elif self.election_term < request["election_term"]:
             self.cluster_leader_addr = candidate_addr
@@ -550,8 +558,8 @@ class RaftNode:
             response = {
                 "status": "success",
                 "address": {
-                    "ip":   candidate_addr.ip,
-                    "port": candidate_addr.port,
+                    "ip":   self.address.ip,
+                    "port": self.address.port,
                 }
             }
             print(f"{bcolors.WARNING} Voted for {candidate_addr} {bcolors.ENDC}")
@@ -562,7 +570,7 @@ class RaftNode:
         }
         return json.dumps(response)
     
-    def get_node_info(self, json_request: str) -> "json":
+    def get_node_status(self, json_request: str) -> "json":
         request = json.loads(json_request)
         response = {
             "status": "success",
@@ -579,10 +587,7 @@ class RaftNode:
             "type": self.type.value,
             "voted_for": {
                 "election_term": self.voted_for[0],
-                "candidate_addr": {
-                    "ip":   self.voted_for[1].ip,
-                    "port": self.voted_for[1].port,
-                }
+                "candidate_addr": str(self.voted_for)
             },
             "commit_index": self.commit_index,
             "commit_index_log": self.commit_index_log,
@@ -605,13 +610,20 @@ class RaftNode:
     # Client RPCs
     def request_log(self, _: any):
         if self.type == RaftNode.NodeType.LEADER:
-            response = "[===]              ~Log~              [===]\n"
+            log = "[===]              ~Log~              [===]\n"
             for i in range(len(self.message_log)):
-                response += "Term: " + str(self.term_log[i]) + " | Method: " + str(self.message_log[i]) + "\n"
+                log += "Term: " + str(self.term_log[i]) + " | Method: " + str(self.message_log[i]) + "\n"
+            response = {"status": "success", "log": log}
         else:
-            response = "Err: Not a leader" # Might Do: Redirect to leader, cant seem to figure out how
-        return json.dumps({"log": response})
-
+            response =  {
+                "status": "redirected",
+                "address": {
+                    "ip":   self.cluster_leader_addr.ip,
+                    "port": self.cluster_leader_addr.port,
+                }
+            }
+        return json.dumps(response)
+    
     def execute(self, json_request: str) -> "json":
         response = {
             "status": self.AppResponse.FAILURE.value,
@@ -620,6 +632,7 @@ class RaftNode:
         if self.type == RaftNode.NodeType.LEADER:
             # If leader then add first to your own log
             response = {
+                "status": "success",
                 "ack": False
             }
             while response["ack"] == False:
@@ -628,5 +641,11 @@ class RaftNode:
             if request["method"] in ["enqueue", "dequeue"]:
                 self.commit_index_log.append(1)
         else:
-            response = self.__send_request(json.loads(json_request), "execute", self.cluster_leader_addr)
+            response = {
+                "status": "redirected",
+                "address": {
+                    "ip":   self.cluster_leader_addr.ip,
+                    "port": self.cluster_leader_addr.port,
+                }
+            }
         return json.dumps(response)
