@@ -22,9 +22,9 @@ class bcolors:
 
 class RaftNode:
     HEARTBEAT_INTERVAL = 3
-    ELECTION_TIMEOUT_MIN = 20
-    ELECTION_TIMEOUT_MAX = 40    
-    RPC_TIMEOUT = 3
+    ELECTION_TIMEOUT_MIN = 40
+    ELECTION_TIMEOUT_MAX = 80    
+    RPC_TIMEOUT = 5
 
     class AppResponse(Enum):
         SUCCESS = 1
@@ -378,7 +378,7 @@ class RaftNode:
         repr_output += "Message log : " + str(self.message_log) + "\n"
         repr_output += "Curr term   : " + str(self.election_term) + "\n"
         repr_output += "Committed   : " + str(self.committed_length) + "\n"
-        repr_output += "Queue       : " + str(self.app)
+        # repr_output += "Queue       : " + str(self.app)
         # repr_output += "\nType        : " + str(self.type) + "\n"
         # repr_output += "Addr        : " + str(self.address) + "\n"
         # repr_output += "Leader Addr : " + str(self.cluster_leader_addr) + ""
